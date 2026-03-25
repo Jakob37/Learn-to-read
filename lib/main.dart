@@ -234,6 +234,17 @@ enum PracticeCollection {
 
 enum LetterRating { known, hard, notYet }
 
+enum SessionPlan {
+  quick(label: 'Quick 5', itemLimit: 5),
+  focused(label: 'Focused 10', itemLimit: 10),
+  full(label: 'Full set', itemLimit: null);
+
+  const SessionPlan({required this.label, required this.itemLimit});
+
+  final String label;
+  final int? itemLimit;
+}
+
 class LetterProgress {
   const LetterProgress({required this.item, required this.rating});
 
@@ -249,6 +260,192 @@ class LetterProgress {
       item: json['item'] as String,
       rating: LetterRating.values.byName(json['rating'] as String),
     );
+  }
+}
+
+class ReviewItemState {
+  const ReviewItemState({
+    required this.item,
+    required this.rating,
+    required this.intervalSteps,
+    required this.ease,
+    required this.dueStep,
+    required this.reviewCount,
+  });
+
+  final String item;
+  final LetterRating? rating;
+  final int intervalSteps;
+  final double ease;
+  final int dueStep;
+  final int reviewCount;
+
+  bool get isSeen => rating != null;
+  bool get isDue => isSeen && dueStep <= reviewCount;
+  bool get isKnownNow => rating == LetterRating.known;
+}
+
+class ReviewScheduler {
+  static const double _startingEase = 2.3;
+  static const double _minimumEase = 1.3;
+  static const double _maximumEase = 3.0;
+
+  static Map<String, ReviewItemState> buildStates(
+    PracticeCollection collection,
+    List<LetterProgress> responses,
+  ) {
+    final states = <String, ReviewItemState>{
+      for (final item in collection.items)
+        item: ReviewItemState(
+          item: item,
+          rating: null,
+          intervalSteps: 0,
+          ease: _startingEase,
+          dueStep: 0,
+          reviewCount: responses.length,
+        ),
+    };
+
+    for (var index = 0; index < responses.length; index++) {
+      final response = responses[index];
+      final current = states[response.item];
+      if (current == null) {
+        continue;
+      }
+
+      final nextReviewCount = index + 1;
+      states[response.item] = _applyRating(
+        current,
+        response.rating,
+        nextReviewCount,
+      );
+    }
+
+    return <String, ReviewItemState>{
+      for (final entry in states.entries)
+        entry.key: ReviewItemState(
+          item: entry.value.item,
+          rating: entry.value.rating,
+          intervalSteps: entry.value.intervalSteps,
+          ease: entry.value.ease,
+          dueStep: entry.value.dueStep,
+          reviewCount: responses.length,
+        ),
+    };
+  }
+
+  static ReviewItemState _applyRating(
+    ReviewItemState current,
+    LetterRating rating,
+    int reviewCount,
+  ) {
+    switch (rating) {
+      case LetterRating.notYet:
+        return ReviewItemState(
+          item: current.item,
+          rating: rating,
+          intervalSteps: 0,
+          ease: (current.ease - 0.2).clamp(_minimumEase, _maximumEase),
+          dueStep: reviewCount,
+          reviewCount: reviewCount,
+        );
+      case LetterRating.hard:
+        final nextInterval = current.intervalSteps <= 1
+            ? 1
+            : (current.intervalSteps * 1.2).round().clamp(1, 9999);
+        return ReviewItemState(
+          item: current.item,
+          rating: rating,
+          intervalSteps: nextInterval,
+          ease: (current.ease - 0.15).clamp(_minimumEase, _maximumEase),
+          dueStep: reviewCount + nextInterval,
+          reviewCount: reviewCount,
+        );
+      case LetterRating.known:
+        final nextInterval = switch (current.intervalSteps) {
+          <= 1 => 4,
+          _ => (current.intervalSteps * current.ease).round().clamp(
+            current.intervalSteps + 1,
+            9999,
+          ),
+        };
+        return ReviewItemState(
+          item: current.item,
+          rating: rating,
+          intervalSteps: nextInterval,
+          ease: (current.ease + 0.05).clamp(_minimumEase, _maximumEase),
+          dueStep: reviewCount + nextInterval,
+          reviewCount: reviewCount,
+        );
+    }
+  }
+
+  static bool isCollectionMastered(
+    PracticeCollection collection,
+    List<LetterProgress> responses,
+  ) {
+    final states = buildStates(collection, responses);
+    return collection.items.every((item) {
+      final state = states[item]!;
+      return state.isSeen && state.isKnownNow && !state.isDue;
+    });
+  }
+
+  static String chooseNextItem(
+    PracticeCollection collection,
+    List<LetterProgress> responses,
+  ) {
+    final states = buildStates(collection, responses);
+    final dueItems = <ReviewItemState>[];
+    final unseenItems = <String>[];
+
+    for (final item in collection.items) {
+      final state = states[item]!;
+      if (!state.isSeen) {
+        unseenItems.add(item);
+      } else if (state.isDue) {
+        dueItems.add(state);
+      }
+    }
+
+    if (dueItems.isNotEmpty) {
+      dueItems.sort((left, right) {
+        final ratingOrder = _ratingPriority(
+          left.rating,
+        ).compareTo(_ratingPriority(right.rating));
+        if (ratingOrder != 0) {
+          return ratingOrder;
+        }
+
+        final dueOrder = left.dueStep.compareTo(right.dueStep);
+        if (dueOrder != 0) {
+          return dueOrder;
+        }
+
+        return collection.items
+            .indexOf(left.item)
+            .compareTo(collection.items.indexOf(right.item));
+      });
+
+      return dueItems.first.item;
+    }
+
+    if (unseenItems.isNotEmpty) {
+      return unseenItems.first;
+    }
+
+    final knownStates = collection.items.map((item) => states[item]!).toList()
+      ..sort((left, right) => left.dueStep.compareTo(right.dueStep));
+    return knownStates.first.item;
+  }
+
+  static int _ratingPriority(LetterRating? rating) {
+    return switch (rating) {
+      LetterRating.notYet => 0,
+      LetterRating.hard => 1,
+      LetterRating.known => 2,
+      null => 3,
+    };
   }
 }
 
@@ -324,8 +521,7 @@ bool _isCollectionMastered(
   PracticeCollection collection,
   List<LetterProgress> responses,
 ) {
-  final ratings = _latestRatings(responses);
-  return collection.items.every((item) => ratings[item] == LetterRating.known);
+  return ReviewScheduler.isCollectionMastered(collection, responses);
 }
 
 bool _isCollectionUnlocked(
@@ -382,57 +578,7 @@ String _chooseNextItem(
   PracticeCollection collection,
   List<LetterProgress> responses,
 ) {
-  final latest = _latestRatings(responses);
-  final notYetItems = <String>[];
-  final hardItems = <String>[];
-  final unseenItems = <String>[];
-
-  for (final item in collection.items) {
-    final rating = latest[item];
-
-    if (rating == null) {
-      unseenItems.add(item);
-    } else if (rating == LetterRating.notYet) {
-      notYetItems.add(item);
-    } else if (rating == LetterRating.hard) {
-      hardItems.add(item);
-    }
-  }
-
-  if (notYetItems.isNotEmpty) {
-    return _leastRecentlyReviewedItem(notYetItems, responses);
-  }
-
-  if (hardItems.isNotEmpty) {
-    return _leastRecentlyReviewedItem(hardItems, responses);
-  }
-
-  if (unseenItems.isNotEmpty) {
-    return unseenItems.first;
-  }
-
-  return collection.items.first;
-}
-
-String _leastRecentlyReviewedItem(
-  List<String> candidates,
-  List<LetterProgress> responses,
-) {
-  String bestItem = candidates.first;
-  var bestIndex = responses.length;
-
-  for (final candidate in candidates) {
-    final reviewIndex = responses.lastIndexWhere(
-      (response) => response.item == candidate,
-    );
-
-    if (reviewIndex < bestIndex) {
-      bestItem = candidate;
-      bestIndex = reviewIndex;
-    }
-  }
-
-  return bestItem;
+  return ReviewScheduler.chooseNextItem(collection, responses);
 }
 
 class PracticeHomePage extends StatefulWidget {
@@ -452,8 +598,10 @@ class PracticeHomePage extends StatefulWidget {
 class _PracticeHomePageState extends State<PracticeHomePage> {
   Map<PracticeCollection, List<LetterProgress>> _progress = _emptyProgressMap();
   PracticeCollection _selectedCollection = PracticeCollection.uppercaseLetters;
+  SessionPlan _sessionPlan = SessionPlan.quick;
   bool _choicesVisible = false;
   bool _isLoading = true;
+  int _sessionReviewedCount = 0;
 
   @override
   void initState() {
@@ -469,6 +617,11 @@ class _PracticeHomePageState extends State<PracticeHomePage> {
 
   bool get _isComplete =>
       _isCollectionMastered(_selectedCollection, _responses);
+
+  bool get _isSessionComplete =>
+      !_isComplete &&
+      _sessionPlan.itemLimit != null &&
+      _sessionReviewedCount >= _sessionPlan.itemLimit!;
 
   String get _currentItem => _chooseNextItem(_selectedCollection, _responses);
 
@@ -522,6 +675,7 @@ class _PracticeHomePageState extends State<PracticeHomePage> {
         LetterProgress(item: currentItem, rating: rating),
       ];
       _choicesVisible = false;
+      _sessionReviewedCount++;
     });
 
     await _saveProgress();
@@ -531,9 +685,18 @@ class _PracticeHomePageState extends State<PracticeHomePage> {
     setState(() {
       _progress[_selectedCollection] = <LetterProgress>[];
       _choicesVisible = false;
+      _sessionReviewedCount = 0;
     });
 
     await _saveProgress();
+  }
+
+  void _updateSessionPlan(SessionPlan sessionPlan) {
+    setState(() {
+      _sessionPlan = sessionPlan;
+      _sessionReviewedCount = 0;
+      _choicesVisible = false;
+    });
   }
 
   void _selectCollection(PracticeCollection collection) {
@@ -544,6 +707,7 @@ class _PracticeHomePageState extends State<PracticeHomePage> {
     setState(() {
       _selectedCollection = collection;
       _choicesVisible = false;
+      _sessionReviewedCount = 0;
     });
   }
 
@@ -555,6 +719,14 @@ class _PracticeHomePageState extends State<PracticeHomePage> {
 
     setState(() {
       _selectedCollection = next;
+      _choicesVisible = false;
+      _sessionReviewedCount = 0;
+    });
+  }
+
+  void _continueSession() {
+    setState(() {
+      _sessionReviewedCount = 0;
       _choicesVisible = false;
     });
   }
@@ -582,6 +754,11 @@ class _PracticeHomePageState extends State<PracticeHomePage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: <Widget>[
+                    _SessionPlanPicker(
+                      sessionPlan: _sessionPlan,
+                      onSelected: _updateSessionPlan,
+                    ),
+                    const SizedBox(height: 16),
                     _RecommendationBanner(
                       collection: _recommendedCollection(_progress),
                     ),
@@ -593,11 +770,14 @@ class _PracticeHomePageState extends State<PracticeHomePage> {
                     ),
                     const SizedBox(height: 20),
                     Expanded(
-                      child: _isComplete
+                      child: _isComplete || _isSessionComplete
                           ? _SessionSummary(
                               theme: theme,
                               collection: _selectedCollection,
                               responses: _responses,
+                              sessionPlan: _sessionPlan,
+                              sessionReviewedCount: _sessionReviewedCount,
+                              isCollectionMastered: _isComplete,
                               nextCollection: _nextCollection(
                                 _selectedCollection,
                               ),
@@ -609,14 +789,16 @@ class _PracticeHomePageState extends State<PracticeHomePage> {
                                     _progress,
                                   ),
                               onContinue: _continueToNextCollection,
+                              onContinueSession: _continueSession,
                               onRestart: _restartCollection,
                             )
                           : _PracticeView(
                               theme: theme,
                               collection: _selectedCollection,
                               currentItem: _currentItem,
-                              progressText:
-                                  'Known ${_countByRating(LetterRating.known)} of ${_items.length}',
+                              progressText: _sessionPlan.itemLimit == null
+                                  ? 'Known ${_countByRating(LetterRating.known)} of ${_items.length}'
+                                  : 'Today ${_sessionReviewedCount} of ${_sessionPlan.itemLimit}',
                               knownCount: _countByRating(LetterRating.known),
                               hardCount: _countByRating(LetterRating.hard),
                               notYetCount: _countByRating(LetterRating.notYet),
@@ -675,6 +857,41 @@ class _CollectionPicker extends StatelessWidget {
           ),
           selectedColor: const Color(0xFF12343B),
           backgroundColor: const Color(0xFFE9E0D0),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
+        );
+      }).toList(),
+    );
+  }
+}
+
+class _SessionPlanPicker extends StatelessWidget {
+  const _SessionPlanPicker({
+    required this.sessionPlan,
+    required this.onSelected,
+  });
+
+  final SessionPlan sessionPlan;
+  final ValueChanged<SessionPlan> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      spacing: 10,
+      runSpacing: 10,
+      children: SessionPlan.values.map((plan) {
+        final isSelected = plan == sessionPlan;
+        return ChoiceChip(
+          label: Text(plan.label),
+          selected: isSelected,
+          onSelected: (_) => onSelected(plan),
+          labelStyle: Theme.of(context).textTheme.titleSmall?.copyWith(
+            fontWeight: FontWeight.w700,
+            color: isSelected ? Colors.white : const Color(0xFF12343B),
+          ),
+          selectedColor: const Color(0xFF5B7C6D),
+          backgroundColor: const Color(0xFFF1E6D6),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(20),
           ),
@@ -973,18 +1190,26 @@ class _SessionSummary extends StatelessWidget {
     required this.theme,
     required this.collection,
     required this.responses,
+    required this.sessionPlan,
+    required this.sessionReviewedCount,
+    required this.isCollectionMastered,
     required this.nextCollection,
     required this.nextCollectionUnlocked,
     required this.onContinue,
+    required this.onContinueSession,
     required this.onRestart,
   });
 
   final ThemeData theme;
   final PracticeCollection collection;
   final List<LetterProgress> responses;
+  final SessionPlan sessionPlan;
+  final int sessionReviewedCount;
+  final bool isCollectionMastered;
   final PracticeCollection? nextCollection;
   final bool nextCollectionUnlocked;
   final VoidCallback onContinue;
+  final VoidCallback onContinueSession;
   final Future<void> Function() onRestart;
 
   List<String> _itemsFor(LetterRating rating) {
@@ -997,19 +1222,23 @@ class _SessionSummary extends StatelessWidget {
     final knownItems = _itemsFor(LetterRating.known);
     final hardItems = _itemsFor(LetterRating.hard);
     final notYetItems = _itemsFor(LetterRating.notYet);
+    final isDailySession =
+        !isCollectionMastered && sessionPlan.itemLimit != null;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
         Text(
-          '${collection.title} complete',
+          isDailySession ? 'Session complete' : '${collection.title} complete',
           style: theme.textTheme.headlineMedium?.copyWith(
             fontWeight: FontWeight.w900,
           ),
         ),
         const SizedBox(height: 8),
         Text(
-          'Use this summary to decide what to repeat next. Progress stays saved on this device.',
+          isDailySession
+              ? 'You finished $sessionReviewedCount ${collection.promptNoun == 'word' ? 'words' : 'items'} in this short session. Progress is saved, so you can stop here or keep going.'
+              : 'Use this summary to decide what to repeat next. Progress stays saved on this device.',
           style: theme.textTheme.bodyLarge,
         ),
         const SizedBox(height: 24),
@@ -1037,11 +1266,25 @@ class _SessionSummary extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 16),
+        if (isDailySession) ...<Widget>[
+          FilledButton(
+            onPressed: onContinueSession,
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFF12343B),
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(vertical: 18),
+            ),
+            child: const Text('Keep going'),
+          ),
+          const SizedBox(height: 12),
+        ],
         if (nextCollection != null && nextCollectionUnlocked) ...<Widget>[
           FilledButton(
             onPressed: onContinue,
             style: FilledButton.styleFrom(
-              backgroundColor: const Color(0xFF12343B),
+              backgroundColor: isDailySession
+                  ? const Color(0xFF5B7C6D)
+                  : const Color(0xFF12343B),
               foregroundColor: Colors.white,
               padding: const EdgeInsets.symmetric(vertical: 18),
             ),
