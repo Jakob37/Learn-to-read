@@ -907,6 +907,37 @@ class _PracticeHomePageState extends State<PracticeHomePage> {
     });
   }
 
+  Future<void> _openSettings() {
+    final recommendedCollection = _recommendedCollection(_progress);
+
+    return showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFFF9F3E8),
+      builder: (sheetContext) {
+        return _SettingsSheet(
+          sessionPlan: _sessionPlan,
+          reviewMode: _reviewMode,
+          selectedCollection: _selectedCollection,
+          progress: _progress,
+          recommendedCollection: recommendedCollection,
+          onSessionPlanSelected: (sessionPlan) {
+            Navigator.of(sheetContext).pop();
+            _updateSessionPlan(sessionPlan);
+          },
+          onReviewModeSelected: (reviewMode) {
+            Navigator.of(sheetContext).pop();
+            _updateReviewMode(reviewMode);
+          },
+          onCollectionSelected: (collection) {
+            Navigator.of(sheetContext).pop();
+            _selectCollection(collection);
+          },
+        );
+      },
+    );
+  }
+
   @override
   void dispose() {
     _celebrationTimer?.cancel();
@@ -922,94 +953,190 @@ class _PracticeHomePageState extends State<PracticeHomePage> {
       appBar: AppBar(
         title: const Text('Reading Time'),
         backgroundColor: Colors.transparent,
+        actions: <Widget>[
+          IconButton(
+            key: const Key('settings-button'),
+            tooltip: 'Settings',
+            onPressed: _isLoading ? null : _openSettings,
+            icon: const Icon(Icons.tune_rounded),
+          ),
+        ],
       ),
       body: SafeArea(
         child: _isLoading
             ? const Center(child: CircularProgressIndicator())
             : Padding(
                 padding: const EdgeInsets.all(20),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: <Widget>[
-                    _SessionPlanPicker(
-                      sessionPlan: _sessionPlan,
-                      onSelected: _updateSessionPlan,
-                    ),
-                    const SizedBox(height: 16),
-                    _ReviewModePicker(
-                      reviewMode: _reviewMode,
-                      onSelected: _updateReviewMode,
-                    ),
-                    const SizedBox(height: 16),
-                    _RecommendationBanner(
-                      collection: _recommendedCollection(_progress),
-                    ),
-                    const SizedBox(height: 16),
-                    _ParentDashboard(
-                      progress: _progress,
-                      recommendedCollection: _recommendedCollection(_progress),
-                    ),
-                    const SizedBox(height: 16),
-                    _CollectionPicker(
-                      selectedCollection: _selectedCollection,
-                      progress: _progress,
-                      onSelected: _selectCollection,
-                    ),
-                    const SizedBox(height: 20),
-                    Expanded(
-                      child:
-                          _isComplete ||
-                              _isSessionComplete ||
-                              _isReviewQueueEmpty
-                          ? _SessionSummary(
-                              theme: theme,
-                              collection: _selectedCollection,
-                              responses: _responses,
-                              sessionPlan: _sessionPlan,
-                              sessionReviewedCount: _sessionReviewedCount,
-                              isCollectionMastered: _isComplete,
-                              reviewMode: _reviewMode,
-                              isReviewQueueEmpty: _isReviewQueueEmpty,
-                              nextCollection: _nextCollection(
-                                _selectedCollection,
-                              ),
-                              nextCollectionUnlocked:
-                                  _nextCollection(_selectedCollection) !=
-                                      null &&
-                                  _isCollectionUnlocked(
-                                    _nextCollection(_selectedCollection)!,
-                                    _progress,
-                                  ),
-                              onContinue: _continueToNextCollection,
-                              onContinueSession: _continueSession,
-                              onRestart: _restartCollection,
-                            )
-                          : _PracticeView(
-                              theme: theme,
-                              collection: _selectedCollection,
-                              currentItem: _currentItem!,
-                              progressText: _sessionPlan.itemLimit == null
-                                  ? 'Known ${_countByRating(LetterRating.known)} of ${_items.length}'
-                                  : 'Today ${_sessionReviewedCount} of ${_sessionPlan.itemLimit}',
-                              knownCount: _countByRating(LetterRating.known),
-                              hardCount: _countByRating(LetterRating.hard),
-                              notYetCount: _countByRating(LetterRating.notYet),
-                              choicesVisible: _choicesVisible,
-                              reviewMode: _reviewMode,
-                              celebrationMessage: _celebrationMessage,
-                              onReveal: _playCurrentItem,
-                              onSkip: _skipCurrentItem,
-                              onKnown: () =>
-                                  _rateCurrentItem(LetterRating.known),
-                              onHard: () => _rateCurrentItem(LetterRating.hard),
-                              onNotYet: () =>
-                                  _rateCurrentItem(LetterRating.notYet),
+                child: _isComplete || _isSessionComplete || _isReviewQueueEmpty
+                    ? _SessionSummary(
+                        theme: theme,
+                        collection: _selectedCollection,
+                        responses: _responses,
+                        sessionPlan: _sessionPlan,
+                        sessionReviewedCount: _sessionReviewedCount,
+                        isCollectionMastered: _isComplete,
+                        reviewMode: _reviewMode,
+                        isReviewQueueEmpty: _isReviewQueueEmpty,
+                        nextCollection: _nextCollection(_selectedCollection),
+                        nextCollectionUnlocked:
+                            _nextCollection(_selectedCollection) != null &&
+                            _isCollectionUnlocked(
+                              _nextCollection(_selectedCollection)!,
+                              _progress,
                             ),
-                    ),
-                  ],
-                ),
+                        onContinue: _continueToNextCollection,
+                        onContinueSession: _continueSession,
+                        onRestart: _restartCollection,
+                      )
+                    : _PracticeView(
+                        theme: theme,
+                        collection: _selectedCollection,
+                        currentItem: _currentItem!,
+                        progressText: _sessionPlan.itemLimit == null
+                            ? 'Known ${_countByRating(LetterRating.known)} of ${_items.length}'
+                            : 'Today $_sessionReviewedCount of ${_sessionPlan.itemLimit}',
+                        knownCount: _countByRating(LetterRating.known),
+                        hardCount: _countByRating(LetterRating.hard),
+                        notYetCount: _countByRating(LetterRating.notYet),
+                        choicesVisible: _choicesVisible,
+                        reviewMode: _reviewMode,
+                        celebrationMessage: _celebrationMessage,
+                        onReveal: _playCurrentItem,
+                        onSkip: _skipCurrentItem,
+                        onKnown: () => _rateCurrentItem(LetterRating.known),
+                        onHard: () => _rateCurrentItem(LetterRating.hard),
+                        onNotYet: () => _rateCurrentItem(LetterRating.notYet),
+                      ),
               ),
       ),
+    );
+  }
+}
+
+class _SettingsSheet extends StatelessWidget {
+  const _SettingsSheet({
+    required this.sessionPlan,
+    required this.reviewMode,
+    required this.selectedCollection,
+    required this.progress,
+    required this.recommendedCollection,
+    required this.onSessionPlanSelected,
+    required this.onReviewModeSelected,
+    required this.onCollectionSelected,
+  });
+
+  final SessionPlan sessionPlan;
+  final ReviewMode reviewMode;
+  final PracticeCollection selectedCollection;
+  final Map<PracticeCollection, List<LetterProgress>> progress;
+  final PracticeCollection recommendedCollection;
+  final ValueChanged<SessionPlan> onSessionPlanSelected;
+  final ValueChanged<ReviewMode> onReviewModeSelected;
+  final ValueChanged<PracticeCollection> onCollectionSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+        child: ListView(
+          shrinkWrap: true,
+          children: <Widget>[
+            Center(
+              child: Container(
+                width: 42,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFD6CCBC),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+              ),
+            ),
+            const SizedBox(height: 20),
+            Text(
+              'Settings',
+              style: Theme.of(
+                context,
+              ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w900),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Hide the extra setup here so the practice screen stays focused.',
+              style: Theme.of(context).textTheme.bodyLarge,
+            ),
+            const SizedBox(height: 20),
+            _RecommendationBanner(collection: recommendedCollection),
+            const SizedBox(height: 20),
+            _SettingsSection(
+              title: 'Session length',
+              child: _SessionPlanPicker(
+                sessionPlan: sessionPlan,
+                onSelected: onSessionPlanSelected,
+              ),
+            ),
+            const SizedBox(height: 20),
+            _SettingsSection(
+              title: 'Practice mode',
+              child: _ReviewModePicker(
+                reviewMode: reviewMode,
+                onSelected: onReviewModeSelected,
+              ),
+            ),
+            const SizedBox(height: 20),
+            _SettingsSection(
+              title: 'Choose set',
+              child: _CollectionPicker(
+                selectedCollection: selectedCollection,
+                progress: progress,
+                onSelected: onCollectionSelected,
+              ),
+            ),
+            const SizedBox(height: 20),
+            _SettingsSection(
+              title: 'Parent overview',
+              child: Column(
+                children: PracticeCollection.values.map((collection) {
+                  return Padding(
+                    padding: EdgeInsets.only(
+                      bottom: collection == PracticeCollection.values.last
+                          ? 0
+                          : 12,
+                    ),
+                    child: _CollectionOverviewCard(
+                      snapshot: _buildSnapshot(collection, progress),
+                      isRecommended: collection == recommendedCollection,
+                    ),
+                  );
+                }).toList(),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SettingsSection extends StatelessWidget {
+  const _SettingsSection({required this.title, required this.child});
+
+  final String title;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Text(
+          title,
+          style: Theme.of(
+            context,
+          ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
+        ),
+        const SizedBox(height: 10),
+        child,
+      ],
     );
   }
 }
@@ -1157,77 +1284,6 @@ class _RecommendationBanner extends StatelessWidget {
             ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-class _ParentDashboard extends StatelessWidget {
-  const _ParentDashboard({
-    required this.progress,
-    required this.recommendedCollection,
-  });
-
-  final Map<PracticeCollection, List<LetterProgress>> progress;
-  final PracticeCollection recommendedCollection;
-
-  @override
-  Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: const Color(0xFFF3ECE1),
-        borderRadius: BorderRadius.circular(24),
-      ),
-      child: ListTile(
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-        title: Text(
-          'Parent overview',
-          style: Theme.of(
-            context,
-          ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
-        ),
-        subtitle: Text(
-          'Check progress, weak spots, and what is ready next.',
-          style: Theme.of(context).textTheme.bodyMedium,
-        ),
-        trailing: const Icon(Icons.chevron_right_rounded),
-        onTap: () {
-          showModalBottomSheet<void>(
-            context: context,
-            isScrollControlled: true,
-            backgroundColor: const Color(0xFFF9F3E8),
-            builder: (context) {
-              return SafeArea(
-                child: Padding(
-                  padding: const EdgeInsets.all(20),
-                  child: ListView(
-                    shrinkWrap: true,
-                    children: <Widget>[
-                      Text(
-                        'Parent overview',
-                        style: Theme.of(context).textTheme.headlineSmall
-                            ?.copyWith(fontWeight: FontWeight.w900),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Use this to see weak spots, due reviews, and which set should come next.',
-                        style: Theme.of(context).textTheme.bodyLarge,
-                      ),
-                      for (final collection in PracticeCollection.values)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 12),
-                          child: _CollectionOverviewCard(
-                            snapshot: _buildSnapshot(collection, progress),
-                            isRecommended: collection == recommendedCollection,
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-              );
-            },
-          );
-        },
       ),
     );
   }

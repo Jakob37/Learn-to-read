@@ -81,8 +81,11 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    await tester.tap(find.byKey(const Key('settings-button')));
+    await tester.pumpAndSettle();
+
     expect(find.text('Recommended next: Lowercase letters'), findsOneWidget);
-    expect(find.text('Lowercase letters'), findsOneWidget);
+    expect(find.text('Lowercase letters'), findsAtLeastNWidgets(1));
     expect(find.text('a'), findsOneWidget);
   });
 
@@ -106,7 +109,13 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    await tester.tap(find.byKey(const Key('settings-button')));
+    await tester.pumpAndSettle();
+
     expect(find.text('Quick 5'), findsOneWidget);
+    await tester.tap(find.text('Quick 5'));
+    await tester.pumpAndSettle();
+
     expect(find.text('Today 0 of 5'), findsOneWidget);
 
     for (var index = 0; index < 5; index++) {
@@ -149,7 +158,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('Parent overview'));
+    await tester.tap(find.byKey(const Key('settings-button')));
     await tester.pumpAndSettle();
 
     expect(find.text('Parent overview'), findsAtLeastNWidgets(1));
@@ -178,6 +187,9 @@ void main() {
     await tester.pumpWidget(
       LetterLearningApp(speaker: _FakeLetterSpeaker(), progressStore: store),
     );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('settings-button')));
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('Review only'));
