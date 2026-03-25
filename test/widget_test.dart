@@ -1,4 +1,4 @@
-import 'package:flutter/widgets.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:learntoread/main.dart';
@@ -33,7 +33,7 @@ void main() {
 
   test('collection is only mastered when every item is known and not due', () {
     final inProgress = <LetterProgress>[
-      for (final item in PracticeCollection.uppercaseLetters.items)
+      for (final item in PracticeCollection.uppercaseLetters.defaultItems)
         LetterProgress(item: item, rating: LetterRating.known),
     ];
 
@@ -76,9 +76,7 @@ void main() {
       },
     );
 
-    await tester.pumpWidget(
-      LetterLearningApp(speaker: _FakeLetterSpeaker(), progressStore: store),
-    );
+    await tester.pumpWidget(_buildTestApp(store));
     await tester.pumpAndSettle();
 
     await tester.tap(find.byKey(const Key('settings-button')));
@@ -104,9 +102,7 @@ void main() {
       },
     );
 
-    await tester.pumpWidget(
-      LetterLearningApp(speaker: _FakeLetterSpeaker(), progressStore: store),
-    );
+    await tester.pumpWidget(_buildTestApp(store));
     await tester.pumpAndSettle();
 
     await tester.tap(find.byKey(const Key('settings-button')));
@@ -153,9 +149,7 @@ void main() {
       },
     );
 
-    await tester.pumpWidget(
-      LetterLearningApp(speaker: _FakeLetterSpeaker(), progressStore: store),
-    );
+    await tester.pumpWidget(_buildTestApp(store));
     await tester.pumpAndSettle();
 
     await tester.tap(find.byKey(const Key('settings-button')));
@@ -184,9 +178,7 @@ void main() {
       },
     );
 
-    await tester.pumpWidget(
-      LetterLearningApp(speaker: _FakeLetterSpeaker(), progressStore: store),
-    );
+    await tester.pumpWidget(_buildTestApp(store));
     await tester.pumpAndSettle();
 
     await tester.tap(find.byKey(const Key('settings-button')));
@@ -213,9 +205,7 @@ void main() {
       },
     );
 
-    await tester.pumpWidget(
-      LetterLearningApp(speaker: _FakeLetterSpeaker(), progressStore: store),
-    );
+    await tester.pumpWidget(_buildTestApp(store));
     await tester.pumpAndSettle();
 
     expect(find.text('A'), findsOneWidget);
@@ -242,9 +232,7 @@ void main() {
       },
     );
 
-    await tester.pumpWidget(
-      LetterLearningApp(speaker: _FakeLetterSpeaker(), progressStore: store),
-    );
+    await tester.pumpWidget(_buildTestApp(store));
     await tester.pumpAndSettle();
 
     await tester.tap(find.byKey(const Key('practice-card')));
@@ -256,6 +244,92 @@ void main() {
 
     expect(find.text('Nice job!'), findsOneWidget);
   });
+
+  testWidgets('settings show editable word lists and allow adding words', (
+    WidgetTester tester,
+  ) async {
+    tester.view.physicalSize = const Size(1200, 2000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final store = _FakeProgressStore(
+      initialProgress: <PracticeCollection, List<LetterProgress>>{
+        for (final collection in PracticeCollection.values)
+          collection: <LetterProgress>[],
+        PracticeCollection.uppercaseLetters: _stabilizedResponses(
+          PracticeCollection.uppercaseLetters,
+        ),
+        PracticeCollection.lowercaseLetters: _stabilizedResponses(
+          PracticeCollection.lowercaseLetters,
+        ),
+      },
+    );
+
+    await tester.pumpWidget(_buildTestApp(store));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('settings-button')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Two-letter words'), findsAtLeastNWidgets(1));
+    expect(find.byKey(const Key('two_letter_words-am')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('add-word-two_letter_words')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(EditableText), 'ax');
+    await tester.tap(find.widgetWithText(FilledButton, 'Add'));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('two_letter_words-ax')), findsOneWidget);
+  });
+
+  testWidgets('continuous mode keeps reviewing without session summary', (
+    WidgetTester tester,
+  ) async {
+    tester.view.physicalSize = const Size(1200, 2000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final store = _FakeProgressStore(
+      initialProgress: <PracticeCollection, List<LetterProgress>>{
+        for (final collection in PracticeCollection.values)
+          collection: <LetterProgress>[],
+      },
+    );
+
+    await tester.pumpWidget(_buildTestApp(store));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('settings-button')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Continuous'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Continuous'), findsOneWidget);
+
+    for (var index = 0; index < 6; index++) {
+      await tester.tap(find.byKey(const Key('practice-card')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Known'));
+      await tester.pumpAndSettle();
+    }
+
+    expect(find.text('Session complete'), findsNothing);
+    expect(find.byKey(const Key('practice-card')), findsOneWidget);
+  });
+}
+
+LetterLearningApp _buildTestApp(
+  _FakeProgressStore store, {
+  _FakeCollectionStore? collectionStore,
+}) {
+  return LetterLearningApp(
+    speaker: _FakeLetterSpeaker(),
+    progressStore: store,
+    collectionStore: collectionStore ?? _FakeCollectionStore(),
+  );
 }
 
 List<LetterProgress> _stabilizedResponses(PracticeCollection collection) {
@@ -310,6 +384,40 @@ class _FakeProgressStore implements ProgressStore {
     _stored = <PracticeCollection, List<LetterProgress>>{
       for (final entry in progress.entries)
         entry.key: List<LetterProgress>.from(entry.value),
+    };
+  }
+}
+
+class _FakeCollectionStore implements CollectionStore {
+  _FakeCollectionStore({
+    Map<PracticeCollection, List<String>>? initialCollections,
+  }) : _stored = <PracticeCollection, List<String>>{
+         for (final collection in PracticeCollection.values)
+           collection: List<String>.from(
+             initialCollections?[collection] ?? collection.defaultItems,
+           ),
+       };
+
+  Map<PracticeCollection, List<String>> _stored;
+
+  @override
+  Future<Map<PracticeCollection, List<String>>> loadCollections() async {
+    return <PracticeCollection, List<String>>{
+      for (final entry in _stored.entries)
+        entry.key: List<String>.from(entry.value),
+    };
+  }
+
+  @override
+  Future<void> saveCollection(
+    PracticeCollection collection,
+    List<String> items,
+  ) async {
+    _stored = <PracticeCollection, List<String>>{
+      for (final entry in _stored.entries)
+        entry.key: entry.key == collection
+            ? List<String>.from(items)
+            : List<String>.from(entry.value),
     };
   }
 }

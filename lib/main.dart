@@ -12,10 +12,16 @@ void main() {
 }
 
 class LetterLearningApp extends StatelessWidget {
-  const LetterLearningApp({super.key, this.speaker, this.progressStore});
+  const LetterLearningApp({
+    super.key,
+    this.speaker,
+    this.progressStore,
+    this.collectionStore,
+  });
 
   final LetterSpeaker? speaker;
   final ProgressStore? progressStore;
+  final CollectionStore? collectionStore;
 
   @override
   Widget build(BuildContext context) {
@@ -35,6 +41,7 @@ class LetterLearningApp extends StatelessWidget {
       home: PracticeHomePage(
         speaker: speaker ?? FlutterLetterSpeaker(),
         progressStore: progressStore ?? SharedPreferencesProgressStore(),
+        collectionStore: collectionStore ?? SharedPreferencesCollectionStore(),
       ),
     );
   }
@@ -102,7 +109,7 @@ enum PracticeCollection {
     label: 'ABC',
     title: 'Uppercase letters',
     promptNoun: 'letter',
-    items: <String>[
+    defaultItems: <String>[
       'A',
       'B',
       'C',
@@ -136,7 +143,7 @@ enum PracticeCollection {
     label: 'abc',
     title: 'Lowercase letters',
     promptNoun: 'letter',
-    items: <String>[
+    defaultItems: <String>[
       'a',
       'b',
       'c',
@@ -170,7 +177,7 @@ enum PracticeCollection {
     label: '2-letter',
     title: 'Two-letter words',
     promptNoun: 'word',
-    items: <String>[
+    defaultItems: <String>[
       'am',
       'an',
       'at',
@@ -200,7 +207,7 @@ enum PracticeCollection {
     label: '3-letter',
     title: 'Three-letter words',
     promptNoun: 'word',
-    items: <String>[
+    defaultItems: <String>[
       'bag',
       'bed',
       'big',
@@ -233,14 +240,18 @@ enum PracticeCollection {
     required this.label,
     required this.title,
     required this.promptNoun,
-    required this.items,
+    required this.defaultItems,
   });
 
   final String id;
   final String label;
   final String title;
   final String promptNoun;
-  final List<String> items;
+  final List<String> defaultItems;
+
+  bool get isEditableWordSet =>
+      this == PracticeCollection.twoLetterWords ||
+      this == PracticeCollection.threeLetterWords;
 }
 
 enum LetterRating { known, hard, notYet }
@@ -248,12 +259,18 @@ enum LetterRating { known, hard, notYet }
 enum SessionPlan {
   quick(label: 'Quick 5', itemLimit: 5),
   focused(label: 'Focused 10', itemLimit: 10),
-  full(label: 'Full set', itemLimit: null);
+  full(label: 'Full set', itemLimit: null),
+  continuous(label: 'Continuous', itemLimit: null, isContinuous: true);
 
-  const SessionPlan({required this.label, required this.itemLimit});
+  const SessionPlan({
+    required this.label,
+    required this.itemLimit,
+    this.isContinuous = false,
+  });
 
   final String label;
   final int? itemLimit;
+  final bool isContinuous;
 }
 
 enum ReviewMode {
@@ -312,10 +329,12 @@ class ReviewScheduler {
 
   static Map<String, ReviewItemState> buildStates(
     PracticeCollection collection,
-    List<LetterProgress> responses,
-  ) {
+    List<LetterProgress> responses, {
+    List<String>? items,
+  }) {
+    final collectionItems = items ?? collection.defaultItems;
     final states = <String, ReviewItemState>{
-      for (final item in collection.items)
+      for (final item in collectionItems)
         item: ReviewItemState(
           item: item,
           rating: null,
@@ -402,10 +421,12 @@ class ReviewScheduler {
 
   static bool isCollectionMastered(
     PracticeCollection collection,
-    List<LetterProgress> responses,
-  ) {
-    final states = buildStates(collection, responses);
-    return collection.items.every((item) {
+    List<LetterProgress> responses, {
+    List<String>? items,
+  }) {
+    final collectionItems = items ?? collection.defaultItems;
+    final states = buildStates(collection, responses, items: collectionItems);
+    return collectionItems.every((item) {
       final state = states[item]!;
       return state.isSeen && state.isKnownNow && !state.isDue;
     });
@@ -416,12 +437,14 @@ class ReviewScheduler {
     List<LetterProgress> responses, {
     bool includeUnseen = true,
     Set<String> excludedItems = const <String>{},
+    List<String>? items,
   }) {
-    final states = buildStates(collection, responses);
+    final collectionItems = items ?? collection.defaultItems;
+    final states = buildStates(collection, responses, items: collectionItems);
     final dueItems = <ReviewItemState>[];
     final unseenItems = <String>[];
 
-    for (final item in collection.items) {
+    for (final item in collectionItems) {
       if (excludedItems.contains(item)) {
         continue;
       }
@@ -450,9 +473,9 @@ class ReviewScheduler {
           return dueOrder;
         }
 
-        return collection.items
+        return collectionItems
             .indexOf(left.item)
-            .compareTo(collection.items.indexOf(right.item));
+            .compareTo(collectionItems.indexOf(right.item));
       });
 
       return dueItems.first.item;
@@ -466,7 +489,7 @@ class ReviewScheduler {
       return null;
     }
 
-    final knownStates = collection.items.map((item) => states[item]!).toList()
+    final knownStates = collectionItems.map((item) => states[item]!).toList()
       ..retainWhere((state) => !excludedItems.contains(state.item))
       ..sort((left, right) => left.dueStep.compareTo(right.dueStep));
     if (knownStates.isEmpty) {
@@ -490,6 +513,14 @@ abstract class ProgressStore {
   Future<Map<PracticeCollection, List<LetterProgress>>> loadProgress();
   Future<void> saveProgress(
     Map<PracticeCollection, List<LetterProgress>> progress,
+  );
+}
+
+abstract class CollectionStore {
+  Future<Map<PracticeCollection, List<String>>> loadCollections();
+  Future<void> saveCollection(
+    PracticeCollection collection,
+    List<String> items,
   );
 }
 
@@ -537,11 +568,94 @@ class SharedPreferencesProgressStore implements ProgressStore {
   }
 }
 
+class SharedPreferencesCollectionStore implements CollectionStore {
+  static const String _storageKey = 'practice_collections_v1';
+
+  @override
+  Future<Map<PracticeCollection, List<String>>> loadCollections() async {
+    final prefs = await SharedPreferences.getInstance();
+    final rawJson = prefs.getString(_storageKey);
+    final collections = _defaultCollectionItems();
+
+    if (rawJson == null || rawJson.isEmpty) {
+      return collections;
+    }
+
+    final decoded = jsonDecode(rawJson) as Map<String, dynamic>;
+
+    for (final collection in PracticeCollection.values) {
+      if (!collection.isEditableWordSet) {
+        continue;
+      }
+
+      final items = decoded[collection.id];
+      if (items is! List<dynamic>) {
+        continue;
+      }
+
+      collections[collection] = items.map((item) => item as String).toList();
+    }
+
+    return collections;
+  }
+
+  @override
+  Future<void> saveCollection(
+    PracticeCollection collection,
+    List<String> items,
+  ) async {
+    final prefs = await SharedPreferences.getInstance();
+    final current = await loadCollections();
+    current[collection] = List<String>.from(items);
+    final encoded = <String, dynamic>{
+      for (final entry in current.entries)
+        if (entry.key.isEditableWordSet) entry.key.id: entry.value,
+    };
+    await prefs.setString(_storageKey, jsonEncode(encoded));
+  }
+}
+
 Map<PracticeCollection, List<LetterProgress>> _emptyProgressMap() {
   return <PracticeCollection, List<LetterProgress>>{
     for (final collection in PracticeCollection.values)
       collection: <LetterProgress>[],
   };
+}
+
+Map<PracticeCollection, List<String>> _defaultCollectionItems() {
+  return <PracticeCollection, List<String>>{
+    for (final collection in PracticeCollection.values)
+      collection: List<String>.from(collection.defaultItems),
+  };
+}
+
+List<String> _sanitizeCollectionItems(
+  PracticeCollection collection,
+  Iterable<String> items,
+) {
+  final targetLength = switch (collection) {
+    PracticeCollection.twoLetterWords => 2,
+    PracticeCollection.threeLetterWords => 3,
+    _ => null,
+  };
+
+  final sanitized = <String>[];
+  final seen = <String>{};
+
+  for (final item in items) {
+    final normalized = item.trim().toLowerCase();
+    if (normalized.isEmpty) {
+      continue;
+    }
+    if (targetLength != null && normalized.runes.length != targetLength) {
+      continue;
+    }
+    if (seen.add(normalized)) {
+      sanitized.add(normalized);
+    }
+  }
+
+  return sanitized;
 }
 
 Map<String, LetterRating> _latestRatings(List<LetterProgress> responses) {
@@ -557,13 +671,19 @@ Map<String, LetterRating> _latestRatings(List<LetterProgress> responses) {
 bool _isCollectionMastered(
   PracticeCollection collection,
   List<LetterProgress> responses,
+  Map<PracticeCollection, List<String>> collectionItems,
 ) {
-  return ReviewScheduler.isCollectionMastered(collection, responses);
+  return ReviewScheduler.isCollectionMastered(
+    collection,
+    responses,
+    items: collectionItems[collection],
+  );
 }
 
 bool _isCollectionUnlocked(
   PracticeCollection collection,
   Map<PracticeCollection, List<LetterProgress>> progress,
+  Map<PracticeCollection, List<String>> collectionItems,
 ) {
   switch (collection) {
     case PracticeCollection.uppercaseLetters:
@@ -572,29 +692,37 @@ bool _isCollectionUnlocked(
       return _isCollectionMastered(
         PracticeCollection.uppercaseLetters,
         progress[PracticeCollection.uppercaseLetters]!,
+        collectionItems,
       );
     case PracticeCollection.twoLetterWords:
       return _isCollectionMastered(
         PracticeCollection.lowercaseLetters,
         progress[PracticeCollection.lowercaseLetters]!,
+        collectionItems,
       );
     case PracticeCollection.threeLetterWords:
       return _isCollectionMastered(
         PracticeCollection.twoLetterWords,
         progress[PracticeCollection.twoLetterWords]!,
+        collectionItems,
       );
   }
 }
 
 PracticeCollection _recommendedCollection(
   Map<PracticeCollection, List<LetterProgress>> progress,
+  Map<PracticeCollection, List<String>> collectionItems,
 ) {
   for (final collection in PracticeCollection.values) {
-    if (!_isCollectionUnlocked(collection, progress)) {
+    if (!_isCollectionUnlocked(collection, progress, collectionItems)) {
       continue;
     }
 
-    if (!_isCollectionMastered(collection, progress[collection]!)) {
+    if (!_isCollectionMastered(
+      collection,
+      progress[collection]!,
+      collectionItems,
+    )) {
       return collection;
     }
   }
@@ -616,18 +744,21 @@ String? _chooseNextItem(
   List<LetterProgress> responses, {
   required ReviewMode reviewMode,
   Set<String> excludedItems = const <String>{},
+  required Map<PracticeCollection, List<String>> collectionItems,
 }) {
   return ReviewScheduler.chooseNextItem(
     collection,
     responses,
     includeUnseen: reviewMode == ReviewMode.balanced,
     excludedItems: excludedItems,
+    items: collectionItems[collection],
   );
 }
 
 class CollectionSnapshot {
   const CollectionSnapshot({
     required this.collection,
+    required this.totalCount,
     required this.knownCount,
     required this.dueCount,
     required this.weakCount,
@@ -637,6 +768,7 @@ class CollectionSnapshot {
   });
 
   final PracticeCollection collection;
+  final int totalCount;
   final int knownCount;
   final int dueCount;
   final int weakCount;
@@ -648,9 +780,15 @@ class CollectionSnapshot {
 CollectionSnapshot _buildSnapshot(
   PracticeCollection collection,
   Map<PracticeCollection, List<LetterProgress>> progress,
+  Map<PracticeCollection, List<String>> collectionItems,
 ) {
   final responses = progress[collection]!;
-  final states = ReviewScheduler.buildStates(collection, responses);
+  final items = collectionItems[collection]!;
+  final states = ReviewScheduler.buildStates(
+    collection,
+    responses,
+    items: items,
+  );
   final knownCount = states.values.where((state) => state.isKnownNow).length;
   final dueCount = states.values.where((state) => state.isDue).length;
   final weakCount = states.values
@@ -664,12 +802,13 @@ CollectionSnapshot _buildSnapshot(
 
   return CollectionSnapshot(
     collection: collection,
+    totalCount: items.length,
     knownCount: knownCount,
     dueCount: dueCount,
     weakCount: weakCount,
     seenCount: seenCount,
-    isUnlocked: _isCollectionUnlocked(collection, progress),
-    isMastered: _isCollectionMastered(collection, responses),
+    isUnlocked: _isCollectionUnlocked(collection, progress, collectionItems),
+    isMastered: _isCollectionMastered(collection, responses, collectionItems),
   );
 }
 
@@ -678,10 +817,12 @@ class PracticeHomePage extends StatefulWidget {
     super.key,
     required this.speaker,
     required this.progressStore,
+    required this.collectionStore,
   });
 
   final LetterSpeaker speaker;
   final ProgressStore progressStore;
+  final CollectionStore collectionStore;
 
   @override
   State<PracticeHomePage> createState() => _PracticeHomePageState();
@@ -689,6 +830,8 @@ class PracticeHomePage extends StatefulWidget {
 
 class _PracticeHomePageState extends State<PracticeHomePage> {
   Map<PracticeCollection, List<LetterProgress>> _progress = _emptyProgressMap();
+  Map<PracticeCollection, List<String>> _collectionItems =
+      _defaultCollectionItems();
   PracticeCollection _selectedCollection = PracticeCollection.uppercaseLetters;
   SessionPlan _sessionPlan = SessionPlan.quick;
   ReviewMode _reviewMode = ReviewMode.balanced;
@@ -709,18 +852,19 @@ class _PracticeHomePageState extends State<PracticeHomePage> {
 
   List<LetterProgress> get _responses => _progress[_selectedCollection]!;
 
-  List<String> get _items => _selectedCollection.items;
+  List<String> get _items => _collectionItems[_selectedCollection]!;
 
   Map<String, LetterRating> get _currentRatings => _latestRatings(_responses);
 
   bool get _isComplete =>
-      _isCollectionMastered(_selectedCollection, _responses);
+      _isCollectionMastered(_selectedCollection, _responses, _collectionItems);
 
   String? get _currentItem => _chooseNextItem(
     _selectedCollection,
     _responses,
     reviewMode: _reviewMode,
     excludedItems: _skippedItems,
+    collectionItems: _collectionItems,
   );
 
   bool get _isReviewQueueEmpty => !_isComplete && _currentItem == null;
@@ -728,18 +872,21 @@ class _PracticeHomePageState extends State<PracticeHomePage> {
   bool get _isSessionComplete =>
       !_isComplete &&
       !_isReviewQueueEmpty &&
+      !_sessionPlan.isContinuous &&
       _sessionPlan.itemLimit != null &&
       _sessionReviewedCount >= _sessionPlan.itemLimit!;
 
   Future<void> _loadProgress() async {
     final loaded = await widget.progressStore.loadProgress();
+    final loadedCollections = await widget.collectionStore.loadCollections();
     if (!mounted) {
       return;
     }
 
     setState(() {
       _progress = loaded;
-      _selectedCollection = _recommendedCollection(loaded);
+      _collectionItems = loadedCollections;
+      _selectedCollection = _recommendedCollection(loaded, loadedCollections);
       _isLoading = false;
     });
   }
@@ -750,6 +897,36 @@ class _PracticeHomePageState extends State<PracticeHomePage> {
 
   Future<void> _saveProgress() {
     return widget.progressStore.saveProgress(_progress);
+  }
+
+  Future<void> _saveCollectionItems(
+    PracticeCollection collection,
+    List<String> items,
+  ) {
+    return widget.collectionStore.saveCollection(collection, items);
+  }
+
+  Future<void> _updateCollectionItems(
+    PracticeCollection collection,
+    List<String> items,
+  ) async {
+    final sanitized = _sanitizeCollectionItems(collection, items);
+    if (!collection.isEditableWordSet || sanitized.isEmpty) {
+      return;
+    }
+
+    setState(() {
+      _collectionItems[collection] = sanitized;
+      _choicesVisible = false;
+      _skippedItems.clear();
+      _celebrationMessage = null;
+      if (_selectedCollection == collection) {
+        _sessionReviewedCount = 0;
+        _correctStreak = 0;
+      }
+    });
+
+    await _saveCollectionItems(collection, sanitized);
   }
 
   Future<void> _playCurrentItem() async {
@@ -834,7 +1011,7 @@ class _PracticeHomePageState extends State<PracticeHomePage> {
   }
 
   void _selectCollection(PracticeCollection collection) {
-    if (!_isCollectionUnlocked(collection, _progress)) {
+    if (!_isCollectionUnlocked(collection, _progress, _collectionItems)) {
       return;
     }
 
@@ -850,7 +1027,8 @@ class _PracticeHomePageState extends State<PracticeHomePage> {
 
   void _continueToNextCollection() {
     final next = _nextCollection(_selectedCollection);
-    if (next == null || !_isCollectionUnlocked(next, _progress)) {
+    if (next == null ||
+        !_isCollectionUnlocked(next, _progress, _collectionItems)) {
       return;
     }
 
@@ -918,7 +1096,10 @@ class _PracticeHomePageState extends State<PracticeHomePage> {
   }
 
   Future<void> _openSettings() {
-    final recommendedCollection = _recommendedCollection(_progress);
+    final recommendedCollection = _recommendedCollection(
+      _progress,
+      _collectionItems,
+    );
 
     return showModalBottomSheet<void>(
       context: context,
@@ -930,6 +1111,7 @@ class _PracticeHomePageState extends State<PracticeHomePage> {
           reviewMode: _reviewMode,
           selectedCollection: _selectedCollection,
           progress: _progress,
+          collectionItems: _collectionItems,
           recommendedCollection: recommendedCollection,
           onSessionPlanSelected: (sessionPlan) {
             Navigator.of(sheetContext).pop();
@@ -943,6 +1125,7 @@ class _PracticeHomePageState extends State<PracticeHomePage> {
             Navigator.of(sheetContext).pop();
             _selectCollection(collection);
           },
+          onCollectionItemsChanged: _updateCollectionItems,
         );
       },
     );
@@ -981,6 +1164,7 @@ class _PracticeHomePageState extends State<PracticeHomePage> {
                     ? _SessionSummary(
                         theme: theme,
                         collection: _selectedCollection,
+                        items: _items,
                         responses: _responses,
                         sessionPlan: _sessionPlan,
                         sessionReviewedCount: _sessionReviewedCount,
@@ -993,6 +1177,7 @@ class _PracticeHomePageState extends State<PracticeHomePage> {
                             _isCollectionUnlocked(
                               _nextCollection(_selectedCollection)!,
                               _progress,
+                              _collectionItems,
                             ),
                         onContinue: _continueToNextCollection,
                         onContinueSession: _continueSession,
@@ -1003,13 +1188,14 @@ class _PracticeHomePageState extends State<PracticeHomePage> {
                         collection: _selectedCollection,
                         currentItem: _currentItem!,
                         progressText: _sessionPlan.itemLimit == null
-                            ? 'Known ${_countByRating(LetterRating.known)} of ${_items.length}'
+                            ? _sessionPlan.isContinuous
+                                  ? 'Continuous'
+                                  : 'Known ${_countByRating(LetterRating.known)} of ${_items.length}'
                             : 'Today $_sessionReviewedCount of ${_sessionPlan.itemLimit}',
                         knownCount: _countByRating(LetterRating.known),
                         hardCount: _countByRating(LetterRating.hard),
                         notYetCount: _countByRating(LetterRating.notYet),
                         choicesVisible: _choicesVisible,
-                        reviewMode: _reviewMode,
                         celebrationMessage: _celebrationMessage,
                         onReveal: _playCurrentItem,
                         onSkip: _skipCurrentItem,
@@ -1023,26 +1209,118 @@ class _PracticeHomePageState extends State<PracticeHomePage> {
   }
 }
 
-class _SettingsSheet extends StatelessWidget {
+class _SettingsSheet extends StatefulWidget {
   const _SettingsSheet({
     required this.sessionPlan,
     required this.reviewMode,
     required this.selectedCollection,
     required this.progress,
+    required this.collectionItems,
     required this.recommendedCollection,
     required this.onSessionPlanSelected,
     required this.onReviewModeSelected,
     required this.onCollectionSelected,
+    required this.onCollectionItemsChanged,
   });
 
   final SessionPlan sessionPlan;
   final ReviewMode reviewMode;
   final PracticeCollection selectedCollection;
   final Map<PracticeCollection, List<LetterProgress>> progress;
+  final Map<PracticeCollection, List<String>> collectionItems;
   final PracticeCollection recommendedCollection;
   final ValueChanged<SessionPlan> onSessionPlanSelected;
   final ValueChanged<ReviewMode> onReviewModeSelected;
   final ValueChanged<PracticeCollection> onCollectionSelected;
+  final Future<void> Function(PracticeCollection collection, List<String> items)
+  onCollectionItemsChanged;
+
+  @override
+  State<_SettingsSheet> createState() => _SettingsSheetState();
+}
+
+class _SettingsSheetState extends State<_SettingsSheet> {
+  late Map<PracticeCollection, List<String>> _localCollectionItems;
+
+  @override
+  void initState() {
+    super.initState();
+    _localCollectionItems = <PracticeCollection, List<String>>{
+      for (final entry in widget.collectionItems.entries)
+        entry.key: List<String>.from(entry.value),
+    };
+  }
+
+  Future<void> _promptAddWord(PracticeCollection collection) async {
+    final controller = TextEditingController();
+    final added = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) {
+        final targetLength = collection == PracticeCollection.twoLetterWords
+            ? 2
+            : 3;
+
+        return AlertDialog(
+          title: Text('Add ${collection.title.toLowerCase()}'),
+          content: TextField(
+            controller: controller,
+            autofocus: true,
+            textCapitalization: TextCapitalization.none,
+            decoration: InputDecoration(labelText: '$targetLength-letter word'),
+            onSubmitted: (value) => Navigator.of(dialogContext).pop(value),
+          ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(controller.text),
+              child: const Text('Add'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (added == null) {
+      return;
+    }
+
+    final currentItems = _localCollectionItems[collection]!;
+    final nextItems = _sanitizeCollectionItems(collection, <String>[
+      ...currentItems,
+      added,
+    ]);
+    if (nextItems.length == currentItems.length) {
+      final length = collection == PracticeCollection.twoLetterWords ? 2 : 3;
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Add a unique $length-letter word.')),
+      );
+      return;
+    }
+
+    setState(() {
+      _localCollectionItems[collection] = nextItems;
+    });
+    await widget.onCollectionItemsChanged(collection, nextItems);
+  }
+
+  Future<void> _removeWord(PracticeCollection collection, String item) async {
+    final currentItems = _localCollectionItems[collection]!;
+    if (currentItems.length <= 1) {
+      return;
+    }
+
+    final nextItems = List<String>.from(currentItems)..remove(item);
+    setState(() {
+      _localCollectionItems[collection] = nextItems;
+    });
+    await widget.onCollectionItemsChanged(collection, nextItems);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1075,30 +1353,31 @@ class _SettingsSheet extends StatelessWidget {
               style: Theme.of(context).textTheme.bodyLarge,
             ),
             const SizedBox(height: 20),
-            _RecommendationBanner(collection: recommendedCollection),
+            _RecommendationBanner(collection: widget.recommendedCollection),
             const SizedBox(height: 20),
             _SettingsSection(
               title: 'Session length',
               child: _SessionPlanPicker(
-                sessionPlan: sessionPlan,
-                onSelected: onSessionPlanSelected,
+                sessionPlan: widget.sessionPlan,
+                onSelected: widget.onSessionPlanSelected,
               ),
             ),
             const SizedBox(height: 20),
             _SettingsSection(
               title: 'Practice mode',
               child: _ReviewModePicker(
-                reviewMode: reviewMode,
-                onSelected: onReviewModeSelected,
+                reviewMode: widget.reviewMode,
+                onSelected: widget.onReviewModeSelected,
               ),
             ),
             const SizedBox(height: 20),
             _SettingsSection(
               title: 'Choose set',
               child: _CollectionPicker(
-                selectedCollection: selectedCollection,
-                progress: progress,
-                onSelected: onCollectionSelected,
+                selectedCollection: widget.selectedCollection,
+                progress: widget.progress,
+                collectionItems: _localCollectionItems,
+                onSelected: widget.onCollectionSelected,
               ),
             ),
             const SizedBox(height: 20),
@@ -1113,11 +1392,40 @@ class _SettingsSheet extends StatelessWidget {
                           : 12,
                     ),
                     child: _CollectionOverviewCard(
-                      snapshot: _buildSnapshot(collection, progress),
-                      isRecommended: collection == recommendedCollection,
+                      snapshot: _buildSnapshot(
+                        collection,
+                        widget.progress,
+                        _localCollectionItems,
+                      ),
+                      isRecommended: collection == widget.recommendedCollection,
                     ),
                   );
                 }).toList(),
+              ),
+            ),
+            const SizedBox(height: 20),
+            _SettingsSection(
+              title: 'Word lists',
+              child: Column(
+                children: PracticeCollection.values
+                    .where((collection) => collection.isEditableWordSet)
+                    .map((collection) {
+                      return Padding(
+                        padding: EdgeInsets.only(
+                          bottom:
+                              collection == PracticeCollection.threeLetterWords
+                              ? 0
+                              : 16,
+                        ),
+                        child: _EditableWordListCard(
+                          collection: collection,
+                          items: _localCollectionItems[collection]!,
+                          onAddWord: () => _promptAddWord(collection),
+                          onRemoveWord: (item) => _removeWord(collection, item),
+                        ),
+                      );
+                    })
+                    .toList(),
               ),
             ),
           ],
@@ -1155,11 +1463,13 @@ class _CollectionPicker extends StatelessWidget {
   const _CollectionPicker({
     required this.selectedCollection,
     required this.progress,
+    required this.collectionItems,
     required this.onSelected,
   });
 
   final PracticeCollection selectedCollection;
   final Map<PracticeCollection, List<LetterProgress>> progress;
+  final Map<PracticeCollection, List<String>> collectionItems;
   final ValueChanged<PracticeCollection> onSelected;
 
   @override
@@ -1169,7 +1479,11 @@ class _CollectionPicker extends StatelessWidget {
       runSpacing: 10,
       children: PracticeCollection.values.map((collection) {
         final isSelected = collection == selectedCollection;
-        final isUnlocked = _isCollectionUnlocked(collection, progress);
+        final isUnlocked = _isCollectionUnlocked(
+          collection,
+          progress,
+          collectionItems,
+        );
         return ChoiceChip(
           label: Row(
             mainAxisSize: MainAxisSize.min,
@@ -1310,7 +1624,7 @@ class _CollectionOverviewCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final total = snapshot.collection.items.length;
+    final total = snapshot.totalCount;
     final statusText = switch ((snapshot.isUnlocked, snapshot.isMastered)) {
       (false, _) => 'Locked until earlier set is stable',
       (true, true) => 'Stable and ready to keep or move on',
@@ -1385,6 +1699,72 @@ class _CollectionOverviewCard extends StatelessWidget {
   }
 }
 
+class _EditableWordListCard extends StatelessWidget {
+  const _EditableWordListCard({
+    required this.collection,
+    required this.items,
+    required this.onAddWord,
+    required this.onRemoveWord,
+  });
+
+  final PracticeCollection collection;
+  final List<String> items;
+  final VoidCallback onAddWord;
+  final ValueChanged<String> onRemoveWord;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: const Color(0xFFE0D6C6)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Row(
+              children: <Widget>[
+                Expanded(
+                  child: Text(
+                    collection.title,
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+                TextButton.icon(
+                  key: Key('add-word-${collection.id}'),
+                  onPressed: onAddWord,
+                  icon: const Icon(Icons.add_rounded),
+                  label: const Text('Add'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: items.map((item) {
+                final canRemove = items.length > 1;
+                return InputChip(
+                  key: Key('${collection.id}-$item'),
+                  label: Text(item),
+                  onDeleted: canRemove ? () => onRemoveWord(item) : null,
+                  deleteIcon: const Icon(Icons.close_rounded, size: 18),
+                  backgroundColor: const Color(0xFFF3ECE1),
+                );
+              }).toList(),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _PracticeView extends StatelessWidget {
   const _PracticeView({
     required this.theme,
@@ -1395,7 +1775,6 @@ class _PracticeView extends StatelessWidget {
     required this.hardCount,
     required this.notYetCount,
     required this.choicesVisible,
-    required this.reviewMode,
     required this.celebrationMessage,
     required this.onReveal,
     required this.onSkip,
@@ -1412,7 +1791,6 @@ class _PracticeView extends StatelessWidget {
   final int hardCount;
   final int notYetCount;
   final bool choicesVisible;
-  final ReviewMode reviewMode;
   final String? celebrationMessage;
   final Future<void> Function() onReveal;
   final VoidCallback onSkip;
@@ -1436,18 +1814,7 @@ class _PracticeView extends StatelessWidget {
                 fontWeight: FontWeight.w800,
               ),
             ),
-            const SizedBox(height: 8),
-            Text(
-              choicesVisible
-                  ? 'Did your child know this ${collection.promptNoun}? Hard and not-yet items will come back more often.'
-                  : reviewMode == ReviewMode.reviewOnly
-                  ? 'Review-only mode is on, so only due items will appear.'
-                  : 'Show the ${collection.promptNoun} first, then tap to hear it.',
-              style: theme.textTheme.bodyLarge?.copyWith(
-                color: const Color(0xFF4E5D52),
-              ),
-            ),
-            const SizedBox(height: 24),
+            const SizedBox(height: 16),
             _ProgressStrip(
               progressText: progressText,
               knownCount: knownCount,
@@ -1700,6 +2067,7 @@ class _SessionSummary extends StatelessWidget {
   const _SessionSummary({
     required this.theme,
     required this.collection,
+    required this.items,
     required this.responses,
     required this.sessionPlan,
     required this.sessionReviewedCount,
@@ -1715,6 +2083,7 @@ class _SessionSummary extends StatelessWidget {
 
   final ThemeData theme;
   final PracticeCollection collection;
+  final List<String> items;
   final List<LetterProgress> responses;
   final SessionPlan sessionPlan;
   final int sessionReviewedCount;
@@ -1729,7 +2098,7 @@ class _SessionSummary extends StatelessWidget {
 
   List<String> _itemsFor(LetterRating rating) {
     final latest = _latestRatings(responses);
-    return collection.items.where((item) => latest[item] == rating).toList();
+    return items.where((item) => latest[item] == rating).toList();
   }
 
   @override
