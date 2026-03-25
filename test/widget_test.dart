@@ -214,6 +214,36 @@ void main() {
 
     expect(find.text('B'), findsOneWidget);
   });
+
+  testWidgets('known answers show a celebration banner', (
+    WidgetTester tester,
+  ) async {
+    tester.view.physicalSize = const Size(1200, 2000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final store = _FakeProgressStore(
+      initialProgress: <PracticeCollection, List<LetterProgress>>{
+        for (final collection in PracticeCollection.values)
+          collection: <LetterProgress>[],
+      },
+    );
+
+    await tester.pumpWidget(
+      LetterLearningApp(speaker: _FakeLetterSpeaker(), progressStore: store),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('practice-card')));
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(find.text('Known'), 200);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Known'));
+    await tester.pump();
+
+    expect(find.text('Nice job!'), findsOneWidget);
+  });
 }
 
 List<LetterProgress> _stabilizedResponses(PracticeCollection collection) {

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
@@ -685,6 +686,10 @@ class _PracticeHomePageState extends State<PracticeHomePage> {
   bool _isLoading = true;
   int _sessionReviewedCount = 0;
   final Set<String> _skippedItems = <String>{};
+  int _correctStreak = 0;
+  int _celebrationToken = 0;
+  String? _celebrationMessage;
+  Timer? _celebrationTimer;
 
   @override
   void initState() {
@@ -770,6 +775,16 @@ class _PracticeHomePageState extends State<PracticeHomePage> {
       _skippedItems.remove(currentItem);
     });
 
+    if (rating == LetterRating.known) {
+      _correctStreak++;
+      _showCelebration(
+        _correctStreak >= 3 ? '$_correctStreak in a row!' : 'Nice job!',
+      );
+    } else {
+      _clearCelebration();
+      _correctStreak = 0;
+    }
+
     await _saveProgress();
   }
 
@@ -779,6 +794,8 @@ class _PracticeHomePageState extends State<PracticeHomePage> {
       _choicesVisible = false;
       _sessionReviewedCount = 0;
       _skippedItems.clear();
+      _correctStreak = 0;
+      _celebrationMessage = null;
     });
 
     await _saveProgress();
@@ -790,6 +807,8 @@ class _PracticeHomePageState extends State<PracticeHomePage> {
       _sessionReviewedCount = 0;
       _choicesVisible = false;
       _skippedItems.clear();
+      _correctStreak = 0;
+      _celebrationMessage = null;
     });
   }
 
@@ -799,6 +818,8 @@ class _PracticeHomePageState extends State<PracticeHomePage> {
       _sessionReviewedCount = 0;
       _choicesVisible = false;
       _skippedItems.clear();
+      _correctStreak = 0;
+      _celebrationMessage = null;
     });
   }
 
@@ -812,6 +833,8 @@ class _PracticeHomePageState extends State<PracticeHomePage> {
       _choicesVisible = false;
       _sessionReviewedCount = 0;
       _skippedItems.clear();
+      _correctStreak = 0;
+      _celebrationMessage = null;
     });
   }
 
@@ -826,6 +849,8 @@ class _PracticeHomePageState extends State<PracticeHomePage> {
       _choicesVisible = false;
       _sessionReviewedCount = 0;
       _skippedItems.clear();
+      _correctStreak = 0;
+      _celebrationMessage = null;
     });
   }
 
@@ -834,6 +859,8 @@ class _PracticeHomePageState extends State<PracticeHomePage> {
       _sessionReviewedCount = 0;
       _choicesVisible = false;
       _skippedItems.clear();
+      _correctStreak = 0;
+      _celebrationMessage = null;
     });
   }
 
@@ -846,11 +873,43 @@ class _PracticeHomePageState extends State<PracticeHomePage> {
     setState(() {
       _skippedItems.add(currentItem);
       _choicesVisible = false;
+      _celebrationMessage = null;
+    });
+  }
+
+  void _showCelebration(String message) {
+    final token = ++_celebrationToken;
+    _celebrationTimer?.cancel();
+    setState(() {
+      _celebrationMessage = message;
+    });
+
+    _celebrationTimer = Timer(const Duration(milliseconds: 1200), () {
+      if (!mounted || token != _celebrationToken) {
+        return;
+      }
+
+      setState(() {
+        _celebrationMessage = null;
+      });
+    });
+  }
+
+  void _clearCelebration() {
+    _celebrationToken++;
+    _celebrationTimer?.cancel();
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _celebrationMessage = null;
     });
   }
 
   @override
   void dispose() {
+    _celebrationTimer?.cancel();
     widget.speaker.dispose();
     super.dispose();
   }
@@ -937,6 +996,7 @@ class _PracticeHomePageState extends State<PracticeHomePage> {
                               notYetCount: _countByRating(LetterRating.notYet),
                               choicesVisible: _choicesVisible,
                               reviewMode: _reviewMode,
+                              celebrationMessage: _celebrationMessage,
                               onReveal: _playCurrentItem,
                               onSkip: _skipCurrentItem,
                               onKnown: () =>
@@ -1270,6 +1330,7 @@ class _PracticeView extends StatelessWidget {
     required this.notYetCount,
     required this.choicesVisible,
     required this.reviewMode,
+    required this.celebrationMessage,
     required this.onReveal,
     required this.onSkip,
     required this.onKnown,
@@ -1286,6 +1347,7 @@ class _PracticeView extends StatelessWidget {
   final int notYetCount;
   final bool choicesVisible;
   final ReviewMode reviewMode;
+  final String? celebrationMessage;
   final Future<void> Function() onReveal;
   final VoidCallback onSkip;
   final Future<void> Function() onKnown;
@@ -1326,6 +1388,8 @@ class _PracticeView extends StatelessWidget {
               hardCount: hardCount,
               notYetCount: notYetCount,
             ),
+            const SizedBox(height: 16),
+            _CelebrationBanner(message: celebrationMessage),
             const SizedBox(height: 24),
             SizedBox(
               height: cardHeight.clamp(220.0, 360.0),
@@ -1494,6 +1558,48 @@ class _ProgressStrip extends StatelessWidget {
           color: const Color(0xFFF8D9D9),
         ),
       ],
+    );
+  }
+}
+
+class _CelebrationBanner extends StatelessWidget {
+  const _CelebrationBanner({required this.message});
+
+  final String? message;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 250),
+      child: message == null
+          ? const SizedBox.shrink()
+          : DecoratedBox(
+              key: ValueKey<String>(message!),
+              decoration: BoxDecoration(
+                color: const Color(0xFFD7F1EC),
+                borderRadius: BorderRadius.circular(18),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 12,
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: <Widget>[
+                    const Icon(Icons.stars_rounded, color: Color(0xFF12343B)),
+                    const SizedBox(width: 10),
+                    Text(
+                      message!,
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w800,
+                        color: const Color(0xFF12343B),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
     );
   }
 }
