@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -629,6 +630,24 @@ Map<PracticeCollection, List<String>> _defaultCollectionItems() {
   };
 }
 
+Map<PracticeCollection, List<String>> _shuffledCollectionItems(
+  Map<PracticeCollection, List<String>> source,
+) {
+  return <PracticeCollection, List<String>>{
+    for (final entry in source.entries)
+      entry.key: _shuffledItemsFor(entry.key, entry.value),
+  };
+}
+
+List<String> _shuffledItemsFor(
+  PracticeCollection collection,
+  List<String> items,
+) {
+  final shuffled = List<String>.from(items);
+  shuffled.shuffle(Random(Object.hash(collection.id, items.length)));
+  return shuffled;
+}
+
 List<String> _sanitizeCollectionItems(
   PracticeCollection collection,
   Iterable<String> items,
@@ -685,28 +704,7 @@ bool _isCollectionUnlocked(
   Map<PracticeCollection, List<LetterProgress>> progress,
   Map<PracticeCollection, List<String>> collectionItems,
 ) {
-  switch (collection) {
-    case PracticeCollection.uppercaseLetters:
-      return true;
-    case PracticeCollection.lowercaseLetters:
-      return _isCollectionMastered(
-        PracticeCollection.uppercaseLetters,
-        progress[PracticeCollection.uppercaseLetters]!,
-        collectionItems,
-      );
-    case PracticeCollection.twoLetterWords:
-      return _isCollectionMastered(
-        PracticeCollection.lowercaseLetters,
-        progress[PracticeCollection.lowercaseLetters]!,
-        collectionItems,
-      );
-    case PracticeCollection.threeLetterWords:
-      return _isCollectionMastered(
-        PracticeCollection.twoLetterWords,
-        progress[PracticeCollection.twoLetterWords]!,
-        collectionItems,
-      );
-  }
+  return true;
 }
 
 PracticeCollection _recommendedCollection(
@@ -832,6 +830,8 @@ class _PracticeHomePageState extends State<PracticeHomePage> {
   Map<PracticeCollection, List<LetterProgress>> _progress = _emptyProgressMap();
   Map<PracticeCollection, List<String>> _collectionItems =
       _defaultCollectionItems();
+  Map<PracticeCollection, List<String>> _practiceOrder =
+      _shuffledCollectionItems(_defaultCollectionItems());
   PracticeCollection _selectedCollection = PracticeCollection.uppercaseLetters;
   SessionPlan _sessionPlan = SessionPlan.quick;
   ReviewMode _reviewMode = ReviewMode.balanced;
@@ -864,7 +864,7 @@ class _PracticeHomePageState extends State<PracticeHomePage> {
     _responses,
     reviewMode: _reviewMode,
     excludedItems: _skippedItems,
-    collectionItems: _collectionItems,
+    collectionItems: _practiceOrder,
   );
 
   bool get _isReviewQueueEmpty => !_isComplete && _currentItem == null;
@@ -886,6 +886,7 @@ class _PracticeHomePageState extends State<PracticeHomePage> {
     setState(() {
       _progress = loaded;
       _collectionItems = loadedCollections;
+      _practiceOrder = _shuffledCollectionItems(loadedCollections);
       _selectedCollection = _recommendedCollection(loaded, loadedCollections);
       _isLoading = false;
     });
@@ -917,6 +918,7 @@ class _PracticeHomePageState extends State<PracticeHomePage> {
 
     setState(() {
       _collectionItems[collection] = sanitized;
+      _practiceOrder[collection] = _shuffledItemsFor(collection, sanitized);
       _choicesVisible = false;
       _skippedItems.clear();
       _celebrationMessage = null;
@@ -1011,10 +1013,6 @@ class _PracticeHomePageState extends State<PracticeHomePage> {
   }
 
   void _selectCollection(PracticeCollection collection) {
-    if (!_isCollectionUnlocked(collection, _progress, _collectionItems)) {
-      return;
-    }
-
     setState(() {
       _selectedCollection = collection;
       _choicesVisible = false;
@@ -1027,8 +1025,7 @@ class _PracticeHomePageState extends State<PracticeHomePage> {
 
   void _continueToNextCollection() {
     final next = _nextCollection(_selectedCollection);
-    if (next == null ||
-        !_isCollectionUnlocked(next, _progress, _collectionItems)) {
+    if (next == null) {
       return;
     }
 
@@ -1375,8 +1372,6 @@ class _SettingsSheetState extends State<_SettingsSheet> {
               title: 'Choose set',
               child: _CollectionPicker(
                 selectedCollection: widget.selectedCollection,
-                progress: widget.progress,
-                collectionItems: _localCollectionItems,
                 onSelected: widget.onCollectionSelected,
               ),
             ),
@@ -1462,14 +1457,10 @@ class _SettingsSection extends StatelessWidget {
 class _CollectionPicker extends StatelessWidget {
   const _CollectionPicker({
     required this.selectedCollection,
-    required this.progress,
-    required this.collectionItems,
     required this.onSelected,
   });
 
   final PracticeCollection selectedCollection;
-  final Map<PracticeCollection, List<LetterProgress>> progress;
-  final Map<PracticeCollection, List<String>> collectionItems;
   final ValueChanged<PracticeCollection> onSelected;
 
   @override
@@ -1479,24 +1470,10 @@ class _CollectionPicker extends StatelessWidget {
       runSpacing: 10,
       children: PracticeCollection.values.map((collection) {
         final isSelected = collection == selectedCollection;
-        final isUnlocked = _isCollectionUnlocked(
-          collection,
-          progress,
-          collectionItems,
-        );
         return ChoiceChip(
-          label: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: <Widget>[
-              if (!isUnlocked) ...<Widget>[
-                const Icon(Icons.lock_outline, size: 16),
-                const SizedBox(width: 6),
-              ],
-              Text(collection.label),
-            ],
-          ),
+          label: Text(collection.label),
           selected: isSelected,
-          onSelected: isUnlocked ? (_) => onSelected(collection) : null,
+          onSelected: (_) => onSelected(collection),
           labelStyle: Theme.of(context).textTheme.titleSmall?.copyWith(
             fontWeight: FontWeight.w700,
             color: isSelected ? Colors.white : const Color(0xFF12343B),

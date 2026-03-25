@@ -84,7 +84,7 @@ void main() {
 
     expect(find.text('Recommended next: Lowercase letters'), findsOneWidget);
     expect(find.text('Lowercase letters'), findsAtLeastNWidgets(1));
-    expect(find.text('a'), findsOneWidget);
+    expect(find.textContaining(RegExp(r'^[a-z]$')), findsOneWidget);
   });
 
   testWidgets('quick session mode stops after five reviews', (
@@ -208,13 +208,17 @@ void main() {
     await tester.pumpWidget(_buildTestApp(store));
     await tester.pumpAndSettle();
 
-    expect(find.text('A'), findsOneWidget);
+    final firstItem = find.textContaining(RegExp(r'^[A-Z]$'));
+    expect(firstItem, findsOneWidget);
+    final firstLabel = tester.widget<Text>(firstItem).data!;
     await tester.scrollUntilVisible(find.text('Skip for now'), 200);
     await tester.pumpAndSettle();
     await tester.tap(find.text('Skip for now'));
     await tester.pumpAndSettle();
 
-    expect(find.text('B'), findsOneWidget);
+    final secondItem = find.textContaining(RegExp(r'^[A-Z]$'));
+    expect(secondItem, findsOneWidget);
+    expect(tester.widget<Text>(secondItem).data, isNot(firstLabel));
   });
 
   testWidgets('known answers show a celebration banner', (
@@ -317,6 +321,33 @@ void main() {
     }
 
     expect(find.text('Session complete'), findsNothing);
+    expect(find.byKey(const Key('practice-card')), findsOneWidget);
+  });
+
+  testWidgets('all sets are selectable from the start', (
+    WidgetTester tester,
+  ) async {
+    tester.view.physicalSize = const Size(1200, 2000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final store = _FakeProgressStore(
+      initialProgress: <PracticeCollection, List<LetterProgress>>{
+        for (final collection in PracticeCollection.values)
+          collection: <LetterProgress>[],
+      },
+    );
+
+    await tester.pumpWidget(_buildTestApp(store));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('settings-button')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('3-letter'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Three-letter words'), findsOneWidget);
     expect(find.byKey(const Key('practice-card')), findsOneWidget);
   });
 }
