@@ -47,16 +47,25 @@ abstract class LetterSpeaker {
 
 class FlutterLetterSpeaker implements LetterSpeaker {
   FlutterLetterSpeaker() : _tts = FlutterTts() {
-    _tts.setPitch(1.0);
-    _tts.setSpeechRate(0.42);
-    _tts.awaitSpeakCompletion(true);
+    _configuration = _configureTts(_tts);
+  }
+
+  static const String _swedishLocale = 'sv-SE';
+
+  static Future<void> _configureTts(FlutterTts tts) async {
+    await tts.setLanguage(_swedishLocale);
+    await tts.setPitch(1.0);
+    await tts.setSpeechRate(0.42);
+    await tts.awaitSpeakCompletion(true);
   }
 
   final FlutterTts _tts;
+  late final Future<void> _configuration;
 
   @override
   Future<void> speakItem(String item) async {
     try {
+      await _configuration;
       await _tts.stop();
       await _tts.speak(item);
     } on MissingPluginException {
@@ -73,6 +82,7 @@ class FlutterLetterSpeaker implements LetterSpeaker {
   @override
   Future<void> dispose() async {
     try {
+      await _configuration;
       await _tts.stop();
     } on MissingPluginException {
       if (kDebugMode) {
