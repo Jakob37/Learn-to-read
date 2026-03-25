@@ -61,6 +61,11 @@ void main() {
   testWidgets('app recommends lowercase after uppercase is stabilized', (
     WidgetTester tester,
   ) async {
+    tester.view.physicalSize = const Size(1200, 2000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
     final store = _FakeProgressStore(
       initialProgress: <PracticeCollection, List<LetterProgress>>{
         for (final collection in PracticeCollection.values)
@@ -84,6 +89,11 @@ void main() {
   testWidgets('quick session mode stops after five reviews', (
     WidgetTester tester,
   ) async {
+    tester.view.physicalSize = const Size(1200, 2000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
     final store = _FakeProgressStore(
       initialProgress: <PracticeCollection, List<LetterProgress>>{
         for (final collection in PracticeCollection.values)
@@ -100,11 +110,6 @@ void main() {
     expect(find.text('Today 0 of 5'), findsOneWidget);
 
     for (var index = 0; index < 5; index++) {
-      await tester.scrollUntilVisible(
-        find.byKey(const Key('practice-card')),
-        300,
-      );
-      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('practice-card')));
       await tester.pumpAndSettle();
       await tester.scrollUntilVisible(find.text('Known'), 200);
@@ -122,6 +127,11 @@ void main() {
   testWidgets('parent overview shows per-set progress and due counts', (
     WidgetTester tester,
   ) async {
+    tester.view.physicalSize = const Size(1200, 2000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
     final store = _FakeProgressStore(
       initialProgress: <PracticeCollection, List<LetterProgress>>{
         for (final collection in PracticeCollection.values)
@@ -149,6 +159,61 @@ void main() {
     expect(find.text('Due 1'), findsOneWidget);
     expect(find.text('Weak 1'), findsOneWidget);
   });
+
+  testWidgets('review-only mode stops when no reviews are due', (
+    WidgetTester tester,
+  ) async {
+    tester.view.physicalSize = const Size(1200, 2000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final store = _FakeProgressStore(
+      initialProgress: <PracticeCollection, List<LetterProgress>>{
+        for (final collection in PracticeCollection.values)
+          collection: <LetterProgress>[],
+      },
+    );
+
+    await tester.pumpWidget(
+      LetterLearningApp(speaker: _FakeLetterSpeaker(), progressStore: store),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Review only'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Review caught up'), findsOneWidget);
+  });
+
+  testWidgets('skip for now moves to another item without saving a rating', (
+    WidgetTester tester,
+  ) async {
+    tester.view.physicalSize = const Size(1200, 2000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final store = _FakeProgressStore(
+      initialProgress: <PracticeCollection, List<LetterProgress>>{
+        for (final collection in PracticeCollection.values)
+          collection: <LetterProgress>[],
+      },
+    );
+
+    await tester.pumpWidget(
+      LetterLearningApp(speaker: _FakeLetterSpeaker(), progressStore: store),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('A'), findsOneWidget);
+    await tester.scrollUntilVisible(find.text('Skip for now'), 200);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Skip for now'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('B'), findsOneWidget);
+  });
 }
 
 List<LetterProgress> _stabilizedResponses(PracticeCollection collection) {
@@ -161,7 +226,7 @@ List<LetterProgress> _stabilizedResponses(PracticeCollection collection) {
 
     responses.add(
       LetterProgress(
-        item: ReviewScheduler.chooseNextItem(collection, responses),
+        item: ReviewScheduler.chooseNextItem(collection, responses)!,
         rating: LetterRating.known,
       ),
     );

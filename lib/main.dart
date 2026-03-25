@@ -245,6 +245,15 @@ enum SessionPlan {
   final int? itemLimit;
 }
 
+enum ReviewMode {
+  balanced(label: 'Balanced'),
+  reviewOnly(label: 'Review only');
+
+  const ReviewMode({required this.label});
+
+  final String label;
+}
+
 class LetterProgress {
   const LetterProgress({required this.item, required this.rating});
 
@@ -391,18 +400,26 @@ class ReviewScheduler {
     });
   }
 
-  static String chooseNextItem(
+  static String? chooseNextItem(
     PracticeCollection collection,
-    List<LetterProgress> responses,
-  ) {
+    List<LetterProgress> responses, {
+    bool includeUnseen = true,
+    Set<String> excludedItems = const <String>{},
+  }) {
     final states = buildStates(collection, responses);
     final dueItems = <ReviewItemState>[];
     final unseenItems = <String>[];
 
     for (final item in collection.items) {
+      if (excludedItems.contains(item)) {
+        continue;
+      }
+
       final state = states[item]!;
       if (!state.isSeen) {
-        unseenItems.add(item);
+        if (includeUnseen) {
+          unseenItems.add(item);
+        }
       } else if (state.isDue) {
         dueItems.add(state);
       }
@@ -434,8 +451,17 @@ class ReviewScheduler {
       return unseenItems.first;
     }
 
+    if (!includeUnseen) {
+      return null;
+    }
+
     final knownStates = collection.items.map((item) => states[item]!).toList()
+      ..retainWhere((state) => !excludedItems.contains(state.item))
       ..sort((left, right) => left.dueStep.compareTo(right.dueStep));
+    if (knownStates.isEmpty) {
+      return null;
+    }
+
     return knownStates.first.item;
   }
 
@@ -574,11 +600,18 @@ PracticeCollection? _nextCollection(PracticeCollection collection) {
   return PracticeCollection.values[nextIndex];
 }
 
-String _chooseNextItem(
+String? _chooseNextItem(
   PracticeCollection collection,
-  List<LetterProgress> responses,
-) {
-  return ReviewScheduler.chooseNextItem(collection, responses);
+  List<LetterProgress> responses, {
+  required ReviewMode reviewMode,
+  Set<String> excludedItems = const <String>{},
+}) {
+  return ReviewScheduler.chooseNextItem(
+    collection,
+    responses,
+    includeUnseen: reviewMode == ReviewMode.balanced,
+    excludedItems: excludedItems,
+  );
 }
 
 class CollectionSnapshot {
@@ -647,9 +680,11 @@ class _PracticeHomePageState extends State<PracticeHomePage> {
   Map<PracticeCollection, List<LetterProgress>> _progress = _emptyProgressMap();
   PracticeCollection _selectedCollection = PracticeCollection.uppercaseLetters;
   SessionPlan _sessionPlan = SessionPlan.quick;
+  ReviewMode _reviewMode = ReviewMode.balanced;
   bool _choicesVisible = false;
   bool _isLoading = true;
   int _sessionReviewedCount = 0;
+  final Set<String> _skippedItems = <String>{};
 
   @override
   void initState() {
@@ -666,12 +701,20 @@ class _PracticeHomePageState extends State<PracticeHomePage> {
   bool get _isComplete =>
       _isCollectionMastered(_selectedCollection, _responses);
 
+  String? get _currentItem => _chooseNextItem(
+    _selectedCollection,
+    _responses,
+    reviewMode: _reviewMode,
+    excludedItems: _skippedItems,
+  );
+
+  bool get _isReviewQueueEmpty => !_isComplete && _currentItem == null;
+
   bool get _isSessionComplete =>
       !_isComplete &&
+      !_isReviewQueueEmpty &&
       _sessionPlan.itemLimit != null &&
       _sessionReviewedCount >= _sessionPlan.itemLimit!;
-
-  String get _currentItem => _chooseNextItem(_selectedCollection, _responses);
 
   Future<void> _loadProgress() async {
     final loaded = await widget.progressStore.loadProgress();
@@ -695,11 +738,12 @@ class _PracticeHomePageState extends State<PracticeHomePage> {
   }
 
   Future<void> _playCurrentItem() async {
-    if (_isComplete) {
+    final currentItem = _currentItem;
+    if (_isComplete || currentItem == null) {
       return;
     }
 
-    await widget.speaker.speakItem(_currentItem);
+    await widget.speaker.speakItem(currentItem);
 
     if (!mounted || _choicesVisible) {
       return;
@@ -711,11 +755,10 @@ class _PracticeHomePageState extends State<PracticeHomePage> {
   }
 
   Future<void> _rateCurrentItem(LetterRating rating) async {
-    if (_isComplete) {
+    final currentItem = _currentItem;
+    if (_isComplete || currentItem == null) {
       return;
     }
-
-    final currentItem = _currentItem;
 
     setState(() {
       _progress[_selectedCollection] = <LetterProgress>[
@@ -724,6 +767,7 @@ class _PracticeHomePageState extends State<PracticeHomePage> {
       ];
       _choicesVisible = false;
       _sessionReviewedCount++;
+      _skippedItems.remove(currentItem);
     });
 
     await _saveProgress();
@@ -734,6 +778,7 @@ class _PracticeHomePageState extends State<PracticeHomePage> {
       _progress[_selectedCollection] = <LetterProgress>[];
       _choicesVisible = false;
       _sessionReviewedCount = 0;
+      _skippedItems.clear();
     });
 
     await _saveProgress();
@@ -744,6 +789,16 @@ class _PracticeHomePageState extends State<PracticeHomePage> {
       _sessionPlan = sessionPlan;
       _sessionReviewedCount = 0;
       _choicesVisible = false;
+      _skippedItems.clear();
+    });
+  }
+
+  void _updateReviewMode(ReviewMode reviewMode) {
+    setState(() {
+      _reviewMode = reviewMode;
+      _sessionReviewedCount = 0;
+      _choicesVisible = false;
+      _skippedItems.clear();
     });
   }
 
@@ -756,6 +811,7 @@ class _PracticeHomePageState extends State<PracticeHomePage> {
       _selectedCollection = collection;
       _choicesVisible = false;
       _sessionReviewedCount = 0;
+      _skippedItems.clear();
     });
   }
 
@@ -769,12 +825,26 @@ class _PracticeHomePageState extends State<PracticeHomePage> {
       _selectedCollection = next;
       _choicesVisible = false;
       _sessionReviewedCount = 0;
+      _skippedItems.clear();
     });
   }
 
   void _continueSession() {
     setState(() {
       _sessionReviewedCount = 0;
+      _choicesVisible = false;
+      _skippedItems.clear();
+    });
+  }
+
+  void _skipCurrentItem() {
+    final currentItem = _currentItem;
+    if (currentItem == null) {
+      return;
+    }
+
+    setState(() {
+      _skippedItems.add(currentItem);
       _choicesVisible = false;
     });
   }
@@ -807,6 +877,11 @@ class _PracticeHomePageState extends State<PracticeHomePage> {
                       onSelected: _updateSessionPlan,
                     ),
                     const SizedBox(height: 16),
+                    _ReviewModePicker(
+                      reviewMode: _reviewMode,
+                      onSelected: _updateReviewMode,
+                    ),
+                    const SizedBox(height: 16),
                     _RecommendationBanner(
                       collection: _recommendedCollection(_progress),
                     ),
@@ -823,7 +898,10 @@ class _PracticeHomePageState extends State<PracticeHomePage> {
                     ),
                     const SizedBox(height: 20),
                     Expanded(
-                      child: _isComplete || _isSessionComplete
+                      child:
+                          _isComplete ||
+                              _isSessionComplete ||
+                              _isReviewQueueEmpty
                           ? _SessionSummary(
                               theme: theme,
                               collection: _selectedCollection,
@@ -831,6 +909,8 @@ class _PracticeHomePageState extends State<PracticeHomePage> {
                               sessionPlan: _sessionPlan,
                               sessionReviewedCount: _sessionReviewedCount,
                               isCollectionMastered: _isComplete,
+                              reviewMode: _reviewMode,
+                              isReviewQueueEmpty: _isReviewQueueEmpty,
                               nextCollection: _nextCollection(
                                 _selectedCollection,
                               ),
@@ -848,7 +928,7 @@ class _PracticeHomePageState extends State<PracticeHomePage> {
                           : _PracticeView(
                               theme: theme,
                               collection: _selectedCollection,
-                              currentItem: _currentItem,
+                              currentItem: _currentItem!,
                               progressText: _sessionPlan.itemLimit == null
                                   ? 'Known ${_countByRating(LetterRating.known)} of ${_items.length}'
                                   : 'Today ${_sessionReviewedCount} of ${_sessionPlan.itemLimit}',
@@ -856,7 +936,9 @@ class _PracticeHomePageState extends State<PracticeHomePage> {
                               hardCount: _countByRating(LetterRating.hard),
                               notYetCount: _countByRating(LetterRating.notYet),
                               choicesVisible: _choicesVisible,
+                              reviewMode: _reviewMode,
                               onReveal: _playCurrentItem,
+                              onSkip: _skipCurrentItem,
                               onKnown: () =>
                                   _rateCurrentItem(LetterRating.known),
                               onHard: () => _rateCurrentItem(LetterRating.hard),
@@ -944,6 +1026,38 @@ class _SessionPlanPicker extends StatelessWidget {
             color: isSelected ? Colors.white : const Color(0xFF12343B),
           ),
           selectedColor: const Color(0xFF5B7C6D),
+          backgroundColor: const Color(0xFFF1E6D6),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
+        );
+      }).toList(),
+    );
+  }
+}
+
+class _ReviewModePicker extends StatelessWidget {
+  const _ReviewModePicker({required this.reviewMode, required this.onSelected});
+
+  final ReviewMode reviewMode;
+  final ValueChanged<ReviewMode> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      spacing: 10,
+      runSpacing: 10,
+      children: ReviewMode.values.map((mode) {
+        final isSelected = mode == reviewMode;
+        return ChoiceChip(
+          label: Text(mode.label),
+          selected: isSelected,
+          onSelected: (_) => onSelected(mode),
+          labelStyle: Theme.of(context).textTheme.titleSmall?.copyWith(
+            fontWeight: FontWeight.w700,
+            color: isSelected ? Colors.white : const Color(0xFF12343B),
+          ),
+          selectedColor: const Color(0xFF7A5C3E),
           backgroundColor: const Color(0xFFF1E6D6),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(20),
@@ -1155,7 +1269,9 @@ class _PracticeView extends StatelessWidget {
     required this.hardCount,
     required this.notYetCount,
     required this.choicesVisible,
+    required this.reviewMode,
     required this.onReveal,
+    required this.onSkip,
     required this.onKnown,
     required this.onHard,
     required this.onNotYet,
@@ -1169,7 +1285,9 @@ class _PracticeView extends StatelessWidget {
   final int hardCount;
   final int notYetCount;
   final bool choicesVisible;
+  final ReviewMode reviewMode;
   final Future<void> Function() onReveal;
+  final VoidCallback onSkip;
   final Future<void> Function() onKnown;
   final Future<void> Function() onHard;
   final Future<void> Function() onNotYet;
@@ -1194,6 +1312,8 @@ class _PracticeView extends StatelessWidget {
             Text(
               choicesVisible
                   ? 'Did your child know this ${collection.promptNoun}? Hard and not-yet items will come back more often.'
+                  : reviewMode == ReviewMode.reviewOnly
+                  ? 'Review-only mode is on, so only due items will appear.'
                   : 'Show the ${collection.promptNoun} first, then tap to hear it.',
               style: theme.textTheme.bodyLarge?.copyWith(
                 color: const Color(0xFF4E5D52),
@@ -1291,6 +1411,15 @@ class _PracticeView extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 24),
+            OutlinedButton.icon(
+              onPressed: onSkip,
+              icon: const Icon(Icons.skip_next_rounded),
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 18),
+              ),
+              label: const Text('Skip for now'),
+            ),
+            const SizedBox(height: 12),
             if (choicesVisible) ...<Widget>[
               FilledButton(
                 onPressed: onKnown,
@@ -1403,6 +1532,8 @@ class _SessionSummary extends StatelessWidget {
     required this.sessionPlan,
     required this.sessionReviewedCount,
     required this.isCollectionMastered,
+    required this.reviewMode,
+    required this.isReviewQueueEmpty,
     required this.nextCollection,
     required this.nextCollectionUnlocked,
     required this.onContinue,
@@ -1416,6 +1547,8 @@ class _SessionSummary extends StatelessWidget {
   final SessionPlan sessionPlan;
   final int sessionReviewedCount;
   final bool isCollectionMastered;
+  final ReviewMode reviewMode;
+  final bool isReviewQueueEmpty;
   final PracticeCollection? nextCollection;
   final bool nextCollectionUnlocked;
   final VoidCallback onContinue;
@@ -1434,18 +1567,26 @@ class _SessionSummary extends StatelessWidget {
     final notYetItems = _itemsFor(LetterRating.notYet);
     final isDailySession =
         !isCollectionMastered && sessionPlan.itemLimit != null;
+    final isReviewOnlyComplete =
+        isReviewQueueEmpty && reviewMode == ReviewMode.reviewOnly;
 
     return ListView(
       children: <Widget>[
         Text(
-          isDailySession ? 'Session complete' : '${collection.title} complete',
+          isReviewOnlyComplete
+              ? 'Review caught up'
+              : isDailySession
+              ? 'Session complete'
+              : '${collection.title} complete',
           style: theme.textTheme.headlineMedium?.copyWith(
             fontWeight: FontWeight.w900,
           ),
         ),
         const SizedBox(height: 8),
         Text(
-          isDailySession
+          isReviewOnlyComplete
+              ? 'There are no due reviews left in this set right now. Switch back to balanced mode to introduce new items.'
+              : isDailySession
               ? 'You finished $sessionReviewedCount ${collection.promptNoun == 'word' ? 'words' : 'items'} in this short session. Progress is saved, so you can stop here or keep going.'
               : 'Use this summary to decide what to repeat next. Progress stays saved on this device.',
           style: theme.textTheme.bodyLarge,
@@ -1468,7 +1609,6 @@ class _SessionSummary extends StatelessWidget {
           color: const Color(0xFFF8D9D9),
           items: notYetItems,
         ),
-        const SizedBox(height: 16),
         if (isDailySession) ...<Widget>[
           FilledButton(
             onPressed: onContinueSession,
