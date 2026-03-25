@@ -100,6 +100,11 @@ void main() {
     expect(find.text('Today 0 of 5'), findsOneWidget);
 
     for (var index = 0; index < 5; index++) {
+      await tester.scrollUntilVisible(
+        find.byKey(const Key('practice-card')),
+        300,
+      );
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('practice-card')));
       await tester.pumpAndSettle();
       await tester.scrollUntilVisible(find.text('Known'), 200);
@@ -109,7 +114,40 @@ void main() {
     }
 
     expect(find.text('Session complete'), findsOneWidget);
+    await tester.scrollUntilVisible(find.text('Keep going'), 200);
+    await tester.pumpAndSettle();
     expect(find.text('Keep going'), findsOneWidget);
+  });
+
+  testWidgets('parent overview shows per-set progress and due counts', (
+    WidgetTester tester,
+  ) async {
+    final store = _FakeProgressStore(
+      initialProgress: <PracticeCollection, List<LetterProgress>>{
+        for (final collection in PracticeCollection.values)
+          collection: <LetterProgress>[],
+        PracticeCollection.uppercaseLetters: const <LetterProgress>[
+          LetterProgress(item: 'A', rating: LetterRating.known),
+          LetterProgress(item: 'B', rating: LetterRating.notYet),
+          LetterProgress(item: 'B', rating: LetterRating.notYet),
+        ],
+      },
+    );
+
+    await tester.pumpWidget(
+      LetterLearningApp(speaker: _FakeLetterSpeaker(), progressStore: store),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Parent overview'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Parent overview'), findsAtLeastNWidgets(1));
+    expect(find.text('Uppercase letters'), findsAtLeastNWidgets(1));
+    expect(find.text('Known 1/26'), findsOneWidget);
+    expect(find.text('Seen 2/26'), findsOneWidget);
+    expect(find.text('Due 1'), findsOneWidget);
+    expect(find.text('Weak 1'), findsOneWidget);
   });
 }
 

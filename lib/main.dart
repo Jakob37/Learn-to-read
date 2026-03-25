@@ -581,6 +581,54 @@ String _chooseNextItem(
   return ReviewScheduler.chooseNextItem(collection, responses);
 }
 
+class CollectionSnapshot {
+  const CollectionSnapshot({
+    required this.collection,
+    required this.knownCount,
+    required this.dueCount,
+    required this.weakCount,
+    required this.seenCount,
+    required this.isUnlocked,
+    required this.isMastered,
+  });
+
+  final PracticeCollection collection;
+  final int knownCount;
+  final int dueCount;
+  final int weakCount;
+  final int seenCount;
+  final bool isUnlocked;
+  final bool isMastered;
+}
+
+CollectionSnapshot _buildSnapshot(
+  PracticeCollection collection,
+  Map<PracticeCollection, List<LetterProgress>> progress,
+) {
+  final responses = progress[collection]!;
+  final states = ReviewScheduler.buildStates(collection, responses);
+  final knownCount = states.values.where((state) => state.isKnownNow).length;
+  final dueCount = states.values.where((state) => state.isDue).length;
+  final weakCount = states.values
+      .where(
+        (state) =>
+            state.rating == LetterRating.hard ||
+            state.rating == LetterRating.notYet,
+      )
+      .length;
+  final seenCount = states.values.where((state) => state.isSeen).length;
+
+  return CollectionSnapshot(
+    collection: collection,
+    knownCount: knownCount,
+    dueCount: dueCount,
+    weakCount: weakCount,
+    seenCount: seenCount,
+    isUnlocked: _isCollectionUnlocked(collection, progress),
+    isMastered: _isCollectionMastered(collection, responses),
+  );
+}
+
 class PracticeHomePage extends StatefulWidget {
   const PracticeHomePage({
     super.key,
@@ -763,6 +811,11 @@ class _PracticeHomePageState extends State<PracticeHomePage> {
                       collection: _recommendedCollection(_progress),
                     ),
                     const SizedBox(height: 16),
+                    _ParentDashboard(
+                      progress: _progress,
+                      recommendedCollection: _recommendedCollection(_progress),
+                    ),
+                    const SizedBox(height: 16),
                     _CollectionPicker(
                       selectedCollection: _selectedCollection,
                       progress: _progress,
@@ -927,6 +980,163 @@ class _RecommendationBanner extends StatelessWidget {
                   color: const Color(0xFF12343B),
                 ),
               ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ParentDashboard extends StatelessWidget {
+  const _ParentDashboard({
+    required this.progress,
+    required this.recommendedCollection,
+  });
+
+  final Map<PracticeCollection, List<LetterProgress>> progress;
+  final PracticeCollection recommendedCollection;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: const Color(0xFFF3ECE1),
+        borderRadius: BorderRadius.circular(24),
+      ),
+      child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+        title: Text(
+          'Parent overview',
+          style: Theme.of(
+            context,
+          ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
+        ),
+        subtitle: Text(
+          'Check progress, weak spots, and what is ready next.',
+          style: Theme.of(context).textTheme.bodyMedium,
+        ),
+        trailing: const Icon(Icons.chevron_right_rounded),
+        onTap: () {
+          showModalBottomSheet<void>(
+            context: context,
+            isScrollControlled: true,
+            backgroundColor: const Color(0xFFF9F3E8),
+            builder: (context) {
+              return SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: ListView(
+                    shrinkWrap: true,
+                    children: <Widget>[
+                      Text(
+                        'Parent overview',
+                        style: Theme.of(context).textTheme.headlineSmall
+                            ?.copyWith(fontWeight: FontWeight.w900),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Use this to see weak spots, due reviews, and which set should come next.',
+                        style: Theme.of(context).textTheme.bodyLarge,
+                      ),
+                      for (final collection in PracticeCollection.values)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 12),
+                          child: _CollectionOverviewCard(
+                            snapshot: _buildSnapshot(collection, progress),
+                            isRecommended: collection == recommendedCollection,
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _CollectionOverviewCard extends StatelessWidget {
+  const _CollectionOverviewCard({
+    required this.snapshot,
+    required this.isRecommended,
+  });
+
+  final CollectionSnapshot snapshot;
+  final bool isRecommended;
+
+  @override
+  Widget build(BuildContext context) {
+    final total = snapshot.collection.items.length;
+    final statusText = switch ((snapshot.isUnlocked, snapshot.isMastered)) {
+      (false, _) => 'Locked until earlier set is stable',
+      (true, true) => 'Stable and ready to keep or move on',
+      (true, false) =>
+        snapshot.dueCount > 0 ? '${snapshot.dueCount} due now' : 'In progress',
+    };
+
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: isRecommended
+              ? const Color(0xFF5B7C6D)
+              : const Color(0xFFE0D6C6),
+          width: isRecommended ? 2 : 1,
+        ),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Row(
+              children: <Widget>[
+                Expanded(
+                  child: Text(
+                    snapshot.collection.title,
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+                if (isRecommended)
+                  const _InfoChip(label: 'Next up', color: Color(0xFFD7F1EC)),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              statusText,
+              style: Theme.of(
+                context,
+              ).textTheme.bodyMedium?.copyWith(color: const Color(0xFF4E5D52)),
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: <Widget>[
+                _InfoChip(
+                  label: 'Known ${snapshot.knownCount}/$total',
+                  color: const Color(0xFFD7F1EC),
+                ),
+                _InfoChip(
+                  label: 'Seen ${snapshot.seenCount}/$total',
+                  color: const Color(0xFFE8F1E7),
+                ),
+                _InfoChip(
+                  label: 'Due ${snapshot.dueCount}',
+                  color: const Color(0xFFFFE2C7),
+                ),
+                _InfoChip(
+                  label: 'Weak ${snapshot.weakCount}',
+                  color: const Color(0xFFF8D9D9),
+                ),
+              ],
             ),
           ],
         ),
@@ -1225,8 +1435,7 @@ class _SessionSummary extends StatelessWidget {
     final isDailySession =
         !isCollectionMastered && sessionPlan.itemLimit != null;
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
+    return ListView(
       children: <Widget>[
         Text(
           isDailySession ? 'Session complete' : '${collection.title} complete',
@@ -1242,28 +1451,22 @@ class _SessionSummary extends StatelessWidget {
           style: theme.textTheme.bodyLarge,
         ),
         const SizedBox(height: 24),
-        Expanded(
-          child: ListView(
-            children: <Widget>[
-              _SummaryCard(
-                title: 'Known',
-                color: const Color(0xFFD7F1EC),
-                items: knownItems,
-              ),
-              const SizedBox(height: 12),
-              _SummaryCard(
-                title: 'Hard',
-                color: const Color(0xFFFFE2C7),
-                items: hardItems,
-              ),
-              const SizedBox(height: 12),
-              _SummaryCard(
-                title: 'Not yet',
-                color: const Color(0xFFF8D9D9),
-                items: notYetItems,
-              ),
-            ],
-          ),
+        _SummaryCard(
+          title: 'Known',
+          color: const Color(0xFFD7F1EC),
+          items: knownItems,
+        ),
+        const SizedBox(height: 12),
+        _SummaryCard(
+          title: 'Hard',
+          color: const Color(0xFFFFE2C7),
+          items: hardItems,
+        ),
+        const SizedBox(height: 12),
+        _SummaryCard(
+          title: 'Not yet',
+          color: const Color(0xFFF8D9D9),
+          items: notYetItems,
         ),
         const SizedBox(height: 16),
         if (isDailySession) ...<Widget>[
