@@ -277,7 +277,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Two-letter words'), findsAtLeastNWidgets(1));
-    expect(find.byKey(const Key('two_letter_words-am')), findsOneWidget);
+    expect(find.byKey(const Key('two_letter_words-av')), findsOneWidget);
 
     await tester.tap(find.byKey(const Key('add-word-two_letter_words')));
     await tester.pumpAndSettle();
