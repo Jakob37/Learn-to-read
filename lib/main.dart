@@ -7,6 +7,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
+
+import 'app_version.dart';
 
 void main() {
   runApp(const LetterLearningApp());
@@ -1239,6 +1242,7 @@ class _SettingsSheet extends StatefulWidget {
 }
 
 class _SettingsSheetState extends State<_SettingsSheet> {
+  static final Uri _changelogUri = Uri.parse(kAppChangelogUrl);
   late Map<PracticeCollection, List<String>> _localCollectionItems;
 
   @override
@@ -1319,6 +1323,18 @@ class _SettingsSheetState extends State<_SettingsSheet> {
       _localCollectionItems[collection] = nextItems;
     });
     await widget.onCollectionItemsChanged(collection, nextItems);
+  }
+
+  Future<void> _openChangelog() async {
+    final bool didLaunch = await launchUrl(
+      _changelogUri,
+      mode: LaunchMode.externalApplication,
+    );
+    if (!didLaunch && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not open changelog.')),
+      );
+    }
   }
 
   @override
@@ -1425,8 +1441,46 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                     .toList(),
               ),
             ),
+            const SizedBox(height: 20),
+            _SettingsSection(
+              title: 'App version',
+              child: Row(
+                children: <Widget>[
+                  const _VersionBadge(version: kAppVersionLabel),
+                  const SizedBox(width: 12),
+                  TextButton.icon(
+                    onPressed: _openChangelog,
+                    icon: const Icon(Icons.open_in_new),
+                    label: const Text('Open changelog'),
+                  ),
+                ],
+              ),
+            ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _VersionBadge extends StatelessWidget {
+  const _VersionBadge({required this.version});
+
+  final String version;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.primaryContainer,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        version,
+        style: Theme.of(
+          context,
+        ).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w700),
       ),
     );
   }
