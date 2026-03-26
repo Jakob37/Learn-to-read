@@ -1103,33 +1103,23 @@ class _PracticeHomePageState extends State<PracticeHomePage> {
       _collectionItems,
     );
 
-    return showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: const Color(0xFFF9F3E8),
-      builder: (sheetContext) {
-        return _SettingsSheet(
-          sessionPlan: _sessionPlan,
-          reviewMode: _reviewMode,
-          selectedCollection: _selectedCollection,
-          progress: _progress,
-          collectionItems: _collectionItems,
-          recommendedCollection: recommendedCollection,
-          onSessionPlanSelected: (sessionPlan) {
-            Navigator.of(sheetContext).pop();
-            _updateSessionPlan(sessionPlan);
-          },
-          onReviewModeSelected: (reviewMode) {
-            Navigator.of(sheetContext).pop();
-            _updateReviewMode(reviewMode);
-          },
-          onCollectionSelected: (collection) {
-            Navigator.of(sheetContext).pop();
-            _selectCollection(collection);
-          },
-          onCollectionItemsChanged: _updateCollectionItems,
-        );
-      },
+    return Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (BuildContext context) {
+          return _SettingsPage(
+            sessionPlan: _sessionPlan,
+            reviewMode: _reviewMode,
+            selectedCollection: _selectedCollection,
+            progress: _progress,
+            collectionItems: _collectionItems,
+            recommendedCollection: recommendedCollection,
+            onSessionPlanSelected: _updateSessionPlan,
+            onReviewModeSelected: _updateReviewMode,
+            onCollectionSelected: _selectCollection,
+            onCollectionItemsChanged: _updateCollectionItems,
+          );
+        },
+      ),
     );
   }
 
@@ -1153,7 +1143,7 @@ class _PracticeHomePageState extends State<PracticeHomePage> {
             key: const Key('settings-button'),
             tooltip: 'Settings',
             onPressed: _isLoading ? null : _openSettings,
-            icon: const Icon(Icons.tune_rounded),
+            icon: const Icon(Icons.settings_outlined),
           ),
         ],
       ),
@@ -1211,8 +1201,8 @@ class _PracticeHomePageState extends State<PracticeHomePage> {
   }
 }
 
-class _SettingsSheet extends StatefulWidget {
-  const _SettingsSheet({
+class _SettingsPage extends StatefulWidget {
+  const _SettingsPage({
     required this.sessionPlan,
     required this.reviewMode,
     required this.selectedCollection,
@@ -1238,10 +1228,10 @@ class _SettingsSheet extends StatefulWidget {
   onCollectionItemsChanged;
 
   @override
-  State<_SettingsSheet> createState() => _SettingsSheetState();
+  State<_SettingsPage> createState() => _SettingsPageState();
 }
 
-class _SettingsSheetState extends State<_SettingsSheet> {
+class _SettingsPageState extends State<_SettingsPage> {
   static final Uri _changelogUri = Uri.parse(kAppChangelogUrl);
   late Map<PracticeCollection, List<String>> _localCollectionItems;
 
@@ -1340,116 +1330,103 @@ class _SettingsSheetState extends State<_SettingsSheet> {
   @override
   Widget build(BuildContext context) {
     return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
-        child: ListView(
-          shrinkWrap: true,
-          children: <Widget>[
-            Center(
-              child: Container(
-                width: 42,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFD6CCBC),
-                  borderRadius: BorderRadius.circular(999),
+      child: Scaffold(
+        appBar: AppBar(title: const Text('Settings')),
+        body: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
+          child: ListView(
+            children: <Widget>[
+              Text(
+                'Keep the practice screen simple and move setup here.',
+                style: Theme.of(context).textTheme.bodyLarge,
+              ),
+              const SizedBox(height: 20),
+              _RecommendationBanner(collection: widget.recommendedCollection),
+              const SizedBox(height: 20),
+              _SettingsSection(
+                title: 'Session length',
+                child: _SessionPlanPicker(
+                  sessionPlan: widget.sessionPlan,
+                  onSelected: widget.onSessionPlanSelected,
                 ),
               ),
-            ),
-            const SizedBox(height: 20),
-            Text(
-              'Settings',
-              style: Theme.of(
-                context,
-              ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w900),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Hide the extra setup here so the practice screen stays focused.',
-              style: Theme.of(context).textTheme.bodyLarge,
-            ),
-            const SizedBox(height: 20),
-            _RecommendationBanner(collection: widget.recommendedCollection),
-            const SizedBox(height: 20),
-            _SettingsSection(
-              title: 'Session length',
-              child: _SessionPlanPicker(
-                sessionPlan: widget.sessionPlan,
-                onSelected: widget.onSessionPlanSelected,
+              const SizedBox(height: 20),
+              _SettingsSection(
+                title: 'Practice mode',
+                child: _ReviewModePicker(
+                  reviewMode: widget.reviewMode,
+                  onSelected: widget.onReviewModeSelected,
+                ),
               ),
-            ),
-            const SizedBox(height: 20),
-            _SettingsSection(
-              title: 'Practice mode',
-              child: _ReviewModePicker(
-                reviewMode: widget.reviewMode,
-                onSelected: widget.onReviewModeSelected,
+              const SizedBox(height: 20),
+              _SettingsSection(
+                title: 'Choose set',
+                child: _CollectionPicker(
+                  selectedCollection: widget.selectedCollection,
+                  onSelected: widget.onCollectionSelected,
+                ),
               ),
-            ),
-            const SizedBox(height: 20),
-            _SettingsSection(
-              title: 'Choose set',
-              child: _CollectionPicker(
-                selectedCollection: widget.selectedCollection,
-                onSelected: widget.onCollectionSelected,
-              ),
-            ),
-            const SizedBox(height: 20),
-            _SettingsSection(
-              title: 'Parent overview',
-              child: Column(
-                children: PracticeCollection.values.map((collection) {
-                  return Padding(
-                    padding: EdgeInsets.only(
-                      bottom: collection == PracticeCollection.values.last
-                          ? 0
-                          : 12,
-                    ),
-                    child: _CollectionOverviewCard(
-                      snapshot: _buildSnapshot(
-                        collection,
-                        widget.progress,
-                        _localCollectionItems,
+              const SizedBox(height: 20),
+              _SettingsSection(
+                title: 'Parent overview',
+                child: Column(
+                  children: PracticeCollection.values.map((collection) {
+                    return Padding(
+                      padding: EdgeInsets.only(
+                        bottom: collection == PracticeCollection.values.last
+                            ? 0
+                            : 12,
                       ),
-                      isRecommended: collection == widget.recommendedCollection,
-                    ),
-                  );
-                }).toList(),
-              ),
-            ),
-            const SizedBox(height: 20),
-            _SettingsSection(
-              title: 'Word lists',
-              child: Column(
-                children: PracticeCollection.values
-                    .where((collection) => collection.isEditableWordSet)
-                    .map((collection) {
-                      return Padding(
-                        padding: EdgeInsets.only(
-                          bottom:
-                              collection == PracticeCollection.threeLetterWords
-                              ? 0
-                              : 16,
+                      child: _CollectionOverviewCard(
+                        snapshot: _buildSnapshot(
+                          collection,
+                          widget.progress,
+                          _localCollectionItems,
                         ),
-                        child: _EditableWordListCard(
-                          collection: collection,
-                          items: _localCollectionItems[collection]!,
-                          onAddWord: () => _promptAddWord(collection),
-                          onRemoveWord: (item) => _removeWord(collection, item),
-                        ),
-                      );
-                    })
-                    .toList(),
+                        isRecommended:
+                            collection == widget.recommendedCollection,
+                      ),
+                    );
+                  }).toList(),
+                ),
               ),
-            ),
-            const SizedBox(height: 20),
-            _SettingsSection(
-              title: 'App version',
-              child: _VersionBadge(
-                version: kAppVersionLabel,
-                onTap: _openChangelog,
+              const SizedBox(height: 20),
+              _SettingsSection(
+                title: 'Word lists',
+                child: Column(
+                  children: PracticeCollection.values
+                      .where((collection) => collection.isEditableWordSet)
+                      .map((collection) {
+                        return Padding(
+                          padding: EdgeInsets.only(
+                            bottom:
+                                collection ==
+                                    PracticeCollection.threeLetterWords
+                                ? 0
+                                : 16,
+                          ),
+                          child: _EditableWordListCard(
+                            collection: collection,
+                            items: _localCollectionItems[collection]!,
+                            onAddWord: () => _promptAddWord(collection),
+                            onRemoveWord: (item) =>
+                                _removeWord(collection, item),
+                          ),
+                        );
+                      })
+                      .toList(),
+                ),
               ),
-            ),
-          ],
+              const SizedBox(height: 20),
+              _SettingsSection(
+                title: 'App version',
+                child: _VersionBadge(
+                  version: kAppVersionLabel,
+                  onTap: _openChangelog,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
