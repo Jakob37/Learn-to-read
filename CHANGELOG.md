@@ -2,6 +2,10 @@
 
 All notable user-facing changes to this project should be recorded here.
 
+## v1.3.0
+
+- Added versioned full-app JSON snapshots with `mind`-style automatic local backups, restore-from-backup support, and dormant Supabase bootstrap plumbing for future cloud sync work.
+
 ## v1.2.0
 
 - Moved settings into a full page behind the top-right cog to match the shared app shell pattern.

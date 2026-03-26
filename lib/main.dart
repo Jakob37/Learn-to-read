@@ -9,9 +9,14 @@ import 'package:flutter_tts/flutter_tts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import 'automatic_backup_preferences.dart';
+import 'automatic_backup_service.dart';
 import 'app_version.dart';
+import 'supabase_bootstrap.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await SupabaseBootstrap.initializeIfConfigured();
   runApp(const LetterLearningApp());
 }
 
@@ -21,14 +26,19 @@ class LetterLearningApp extends StatelessWidget {
     this.speaker,
     this.progressStore,
     this.collectionStore,
+    this.appDataStore,
   });
 
   final LetterSpeaker? speaker;
   final ProgressStore? progressStore;
   final CollectionStore? collectionStore;
+  final SharedPreferencesAppDataStore? appDataStore;
 
   @override
   Widget build(BuildContext context) {
+    final SharedPreferencesAppDataStore resolvedAppDataStore =
+        appDataStore ?? const SharedPreferencesAppDataStore();
+
     final colorScheme = ColorScheme.fromSeed(
       seedColor: const Color(0xFFEF8354),
       brightness: Brightness.light,
@@ -44,8 +54,15 @@ class LetterLearningApp extends StatelessWidget {
       ),
       home: PracticeHomePage(
         speaker: speaker ?? FlutterLetterSpeaker(),
-        progressStore: progressStore ?? SharedPreferencesProgressStore(),
-        collectionStore: collectionStore ?? SharedPreferencesCollectionStore(),
+        progressStore:
+            progressStore ??
+            SharedPreferencesProgressStore(appDataStore: resolvedAppDataStore),
+        collectionStore:
+            collectionStore ??
+            SharedPreferencesCollectionStore(
+              appDataStore: resolvedAppDataStore,
+            ),
+        appDataStore: resolvedAppDataStore,
       ),
     );
   }
@@ -530,79 +547,317 @@ abstract class CollectionStore {
   );
 }
 
+class PracticeAppSnapshot {
+  const PracticeAppSnapshot({
+    required this.progress,
+    required this.collectionItems,
+    this.schemaVersion = currentSchemaVersion,
+  });
+
+  static const int currentSchemaVersion = 1;
+
+  final int schemaVersion;
+  final Map<PracticeCollection, List<LetterProgress>> progress;
+  final Map<PracticeCollection, List<String>> collectionItems;
+
+  PracticeAppSnapshot copyWith({
+    Map<PracticeCollection, List<LetterProgress>>? progress,
+    Map<PracticeCollection, List<String>>? collectionItems,
+  }) {
+    return PracticeAppSnapshot(
+      progress: progress ?? this.progress,
+      collectionItems: collectionItems ?? this.collectionItems,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return <String, dynamic>{
+      'schemaVersion': schemaVersion,
+      'progress': <String, dynamic>{
+        for (final MapEntry<PracticeCollection, List<LetterProgress>> entry
+            in progress.entries)
+          entry.key.id: entry.value
+              .map((LetterProgress item) => item.toJson())
+              .toList(),
+      },
+      'collections': <String, dynamic>{
+        for (final MapEntry<PracticeCollection, List<String>> entry
+            in collectionItems.entries)
+          if (entry.key.isEditableWordSet) entry.key.id: entry.value,
+      },
+    };
+  }
+
+  static PracticeAppSnapshot fromJson(Map<String, dynamic> json) {
+    final Map<PracticeCollection, List<LetterProgress>> progress =
+        _emptyProgressMap();
+    final Map<PracticeCollection, List<String>> collectionItems =
+        _defaultCollectionItems();
+
+    final dynamic rawProgress = json['progress'];
+    if (rawProgress is Map) {
+      for (final PracticeCollection collection in PracticeCollection.values) {
+        final dynamic items = rawProgress[collection.id];
+        if (items is! List<dynamic>) {
+          continue;
+        }
+        progress[collection] = items
+            .map(
+              (dynamic entry) => LetterProgress.fromJson(
+                Map<String, dynamic>.from(entry as Map),
+              ),
+            )
+            .toList();
+      }
+    }
+
+    final dynamic rawCollections = json['collections'];
+    if (rawCollections is Map) {
+      for (final PracticeCollection collection in PracticeCollection.values) {
+        if (!collection.isEditableWordSet) {
+          continue;
+        }
+        final dynamic items = rawCollections[collection.id];
+        if (items is! List<dynamic>) {
+          continue;
+        }
+        collectionItems[collection] = items
+            .map((dynamic item) => item as String)
+            .toList();
+      }
+    }
+
+    return PracticeAppSnapshot(
+      schemaVersion:
+          (json['schemaVersion'] as num?)?.toInt() ??
+          PracticeAppSnapshot.currentSchemaVersion,
+      progress: progress,
+      collectionItems: collectionItems,
+    );
+  }
+}
+
+class SharedPreferencesAppDataStore {
+  const SharedPreferencesAppDataStore({
+    LearnToReadBackupService? backupService,
+    LearnToReadBackupPreferences? backupPreferences,
+  }) : _backupService = backupService ?? const LearnToReadBackupService(),
+       _backupPreferences =
+           backupPreferences ?? const LearnToReadBackupPreferences();
+
+  static const String _snapshotKey = 'learn_to_read.snapshot_v1';
+  static const String _legacyProgressKey = 'practice_progress_v1';
+  static const String _legacyCollectionsKey = 'practice_collections_v1';
+
+  final LearnToReadBackupService _backupService;
+  final LearnToReadBackupPreferences _backupPreferences;
+
+  Future<PracticeAppSnapshot> loadSnapshot() async {
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
+    final String? rawSnapshot = prefs.getString(_snapshotKey);
+    if (rawSnapshot != null && rawSnapshot.isNotEmpty) {
+      final dynamic decoded = _tryDecodeJson(rawSnapshot);
+      if (decoded is Map<String, dynamic>) {
+        return PracticeAppSnapshot.fromJson(decoded);
+      }
+      if (decoded is Map) {
+        return PracticeAppSnapshot.fromJson(Map<String, dynamic>.from(decoded));
+      }
+    }
+
+    return _loadLegacySnapshot(prefs);
+  }
+
+  Future<void> saveSnapshot(
+    PracticeAppSnapshot snapshot, {
+    bool forceBackup = false,
+  }) async {
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_snapshotKey, exportAsJsonString(snapshot));
+    await prefs.remove(_legacyProgressKey);
+    await prefs.remove(_legacyCollectionsKey);
+
+    if (await _backupPreferences.loadAutomaticBackupsEnabled()) {
+      await _backupService.saveAutomaticBackup(
+        exportAsJsonString(snapshot),
+        force: forceBackup,
+      );
+    }
+  }
+
+  String exportAsJsonString(PracticeAppSnapshot snapshot) {
+    return const JsonEncoder.withIndent('  ').convert(snapshot.toJson());
+  }
+
+  Future<PracticeAppSnapshot> importFromJsonString(
+    String rawPayload, {
+    bool forceBackup = true,
+  }) async {
+    final dynamic decoded = _tryDecodeJson(rawPayload);
+    if (decoded is! Map) {
+      throw const FormatException('Invalid JSON payload.');
+    }
+
+    final PracticeAppSnapshot snapshot = PracticeAppSnapshot.fromJson(
+      Map<String, dynamic>.from(decoded),
+    );
+    await saveSnapshot(snapshot, forceBackup: forceBackup);
+    return snapshot;
+  }
+
+  Future<Map<PracticeCollection, List<LetterProgress>>> loadProgress() async {
+    return (await loadSnapshot()).progress;
+  }
+
+  Future<void> saveProgress(
+    Map<PracticeCollection, List<LetterProgress>> progress,
+  ) async {
+    final PracticeAppSnapshot current = await loadSnapshot();
+    await saveSnapshot(current.copyWith(progress: progress));
+  }
+
+  Future<Map<PracticeCollection, List<String>>> loadCollections() async {
+    return (await loadSnapshot()).collectionItems;
+  }
+
+  Future<void> saveCollection(
+    PracticeCollection collection,
+    List<String> items,
+  ) async {
+    final PracticeAppSnapshot current = await loadSnapshot();
+    final Map<PracticeCollection, List<String>> nextCollections =
+        <PracticeCollection, List<String>>{
+          for (final MapEntry<PracticeCollection, List<String>> entry
+              in current.collectionItems.entries)
+            entry.key: List<String>.from(entry.value),
+        };
+    nextCollections[collection] = List<String>.from(items);
+    await saveSnapshot(current.copyWith(collectionItems: nextCollections));
+  }
+
+  Future<bool> loadAutomaticBackupsEnabled() {
+    return _backupPreferences.loadAutomaticBackupsEnabled();
+  }
+
+  Future<void> saveAutomaticBackupsEnabled(bool enabled) async {
+    await _backupPreferences.saveAutomaticBackupsEnabled(enabled);
+  }
+
+  Future<void> saveAutomaticBackupNow(PracticeAppSnapshot snapshot) {
+    return _backupService.saveAutomaticBackup(
+      exportAsJsonString(snapshot),
+      force: true,
+    );
+  }
+
+  Future<List<LearnToReadBackupEntry>> listAutomaticBackups() {
+    return _backupService.listBackups();
+  }
+
+  Future<PracticeAppSnapshot> restoreAutomaticBackup(String backupId) async {
+    final String backupJson = await _backupService.readBackup(backupId);
+    final PracticeAppSnapshot snapshot = await importFromJsonString(
+      backupJson,
+      forceBackup: false,
+    );
+    if (await _backupPreferences.loadAutomaticBackupsEnabled()) {
+      await saveAutomaticBackupNow(snapshot);
+    }
+    return snapshot;
+  }
+
+  Future<PracticeAppSnapshot> _loadLegacySnapshot(
+    SharedPreferences prefs,
+  ) async {
+    final Map<PracticeCollection, List<LetterProgress>> progress =
+        _emptyProgressMap();
+    final Map<PracticeCollection, List<String>> collections =
+        _defaultCollectionItems();
+
+    final String? rawProgress = prefs.getString(_legacyProgressKey);
+    if (rawProgress != null && rawProgress.isNotEmpty) {
+      final dynamic decoded = _tryDecodeJson(rawProgress);
+      if (decoded is Map) {
+        for (final PracticeCollection collection in PracticeCollection.values) {
+          final dynamic items = decoded[collection.id];
+          if (items is! List<dynamic>) {
+            continue;
+          }
+          progress[collection] = items
+              .map(
+                (dynamic entry) => LetterProgress.fromJson(
+                  Map<String, dynamic>.from(entry as Map),
+                ),
+              )
+              .toList();
+        }
+      }
+    }
+
+    final String? rawCollections = prefs.getString(_legacyCollectionsKey);
+    if (rawCollections != null && rawCollections.isNotEmpty) {
+      final dynamic decoded = _tryDecodeJson(rawCollections);
+      if (decoded is Map) {
+        for (final PracticeCollection collection in PracticeCollection.values) {
+          if (!collection.isEditableWordSet) {
+            continue;
+          }
+          final dynamic items = decoded[collection.id];
+          if (items is! List<dynamic>) {
+            continue;
+          }
+          collections[collection] = items
+              .map((dynamic item) => item as String)
+              .toList();
+        }
+      }
+    }
+
+    return PracticeAppSnapshot(
+      progress: progress,
+      collectionItems: collections,
+    );
+  }
+
+  dynamic _tryDecodeJson(String rawPayload) {
+    try {
+      return jsonDecode(rawPayload);
+    } on FormatException {
+      return null;
+    }
+  }
+}
+
 class SharedPreferencesProgressStore implements ProgressStore {
-  static const String _storageKey = 'practice_progress_v1';
+  const SharedPreferencesProgressStore({
+    SharedPreferencesAppDataStore? appDataStore,
+  }) : _appDataStore = appDataStore ?? const SharedPreferencesAppDataStore();
+
+  final SharedPreferencesAppDataStore _appDataStore;
 
   @override
   Future<Map<PracticeCollection, List<LetterProgress>>> loadProgress() async {
-    final prefs = await SharedPreferences.getInstance();
-    final rawJson = prefs.getString(_storageKey);
-    final progress = _emptyProgressMap();
-
-    if (rawJson == null || rawJson.isEmpty) {
-      return progress;
-    }
-
-    final decoded = jsonDecode(rawJson) as Map<String, dynamic>;
-
-    for (final collection in PracticeCollection.values) {
-      final items = decoded[collection.id];
-      if (items is! List<dynamic>) {
-        continue;
-      }
-
-      progress[collection] = items
-          .map(
-            (entry) => LetterProgress.fromJson(entry as Map<String, dynamic>),
-          )
-          .toList();
-    }
-
-    return progress;
+    return _appDataStore.loadProgress();
   }
 
   @override
   Future<void> saveProgress(
     Map<PracticeCollection, List<LetterProgress>> progress,
   ) async {
-    final prefs = await SharedPreferences.getInstance();
-    final encoded = <String, dynamic>{
-      for (final entry in progress.entries)
-        entry.key.id: entry.value.map((item) => item.toJson()).toList(),
-    };
-    await prefs.setString(_storageKey, jsonEncode(encoded));
+    await _appDataStore.saveProgress(progress);
   }
 }
 
 class SharedPreferencesCollectionStore implements CollectionStore {
-  static const String _storageKey = 'practice_collections_v1';
+  const SharedPreferencesCollectionStore({
+    SharedPreferencesAppDataStore? appDataStore,
+  }) : _appDataStore = appDataStore ?? const SharedPreferencesAppDataStore();
+
+  final SharedPreferencesAppDataStore _appDataStore;
 
   @override
   Future<Map<PracticeCollection, List<String>>> loadCollections() async {
-    final prefs = await SharedPreferences.getInstance();
-    final rawJson = prefs.getString(_storageKey);
-    final collections = _defaultCollectionItems();
-
-    if (rawJson == null || rawJson.isEmpty) {
-      return collections;
-    }
-
-    final decoded = jsonDecode(rawJson) as Map<String, dynamic>;
-
-    for (final collection in PracticeCollection.values) {
-      if (!collection.isEditableWordSet) {
-        continue;
-      }
-
-      final items = decoded[collection.id];
-      if (items is! List<dynamic>) {
-        continue;
-      }
-
-      collections[collection] = items.map((item) => item as String).toList();
-    }
-
-    return collections;
+    return _appDataStore.loadCollections();
   }
 
   @override
@@ -610,14 +865,7 @@ class SharedPreferencesCollectionStore implements CollectionStore {
     PracticeCollection collection,
     List<String> items,
   ) async {
-    final prefs = await SharedPreferences.getInstance();
-    final current = await loadCollections();
-    current[collection] = List<String>.from(items);
-    final encoded = <String, dynamic>{
-      for (final entry in current.entries)
-        if (entry.key.isEditableWordSet) entry.key.id: entry.value,
-    };
-    await prefs.setString(_storageKey, jsonEncode(encoded));
+    await _appDataStore.saveCollection(collection, items);
   }
 }
 
@@ -821,11 +1069,13 @@ class PracticeHomePage extends StatefulWidget {
     required this.speaker,
     required this.progressStore,
     required this.collectionStore,
+    required this.appDataStore,
   });
 
   final LetterSpeaker speaker;
   final ProgressStore progressStore;
   final CollectionStore collectionStore;
+  final SharedPreferencesAppDataStore appDataStore;
 
   @override
   State<PracticeHomePage> createState() => _PracticeHomePageState();
@@ -910,6 +1160,49 @@ class _PracticeHomePageState extends State<PracticeHomePage> {
     List<String> items,
   ) {
     return widget.collectionStore.saveCollection(collection, items);
+  }
+
+  PracticeAppSnapshot _currentSnapshot() {
+    return PracticeAppSnapshot(
+      progress: <PracticeCollection, List<LetterProgress>>{
+        for (final MapEntry<PracticeCollection, List<LetterProgress>> entry
+            in _progress.entries)
+          entry.key: List<LetterProgress>.from(entry.value),
+      },
+      collectionItems: <PracticeCollection, List<String>>{
+        for (final MapEntry<PracticeCollection, List<String>> entry
+            in _collectionItems.entries)
+          entry.key: List<String>.from(entry.value),
+      },
+    );
+  }
+
+  void _applyLoadedSnapshot(PracticeAppSnapshot snapshot) {
+    final Map<PracticeCollection, List<LetterProgress>> progress =
+        <PracticeCollection, List<LetterProgress>>{
+          for (final MapEntry<PracticeCollection, List<LetterProgress>> entry
+              in snapshot.progress.entries)
+            entry.key: List<LetterProgress>.from(entry.value),
+        };
+    final Map<PracticeCollection, List<String>> collectionItems =
+        <PracticeCollection, List<String>>{
+          for (final MapEntry<PracticeCollection, List<String>> entry
+              in snapshot.collectionItems.entries)
+            entry.key: List<String>.from(entry.value),
+        };
+
+    setState(() {
+      _progress = progress;
+      _collectionItems = collectionItems;
+      _practiceOrder = _shuffledCollectionItems(collectionItems);
+      _selectedCollection = _recommendedCollection(progress, collectionItems);
+      _choicesVisible = false;
+      _sessionReviewedCount = 0;
+      _skippedItems.clear();
+      _correctStreak = 0;
+      _celebrationMessage = null;
+      _isLoading = false;
+    });
   }
 
   Future<void> _updateCollectionItems(
@@ -1117,10 +1410,69 @@ class _PracticeHomePageState extends State<PracticeHomePage> {
             onReviewModeSelected: _updateReviewMode,
             onCollectionSelected: _selectCollection,
             onCollectionItemsChanged: _updateCollectionItems,
+            onExportJsonData: _exportJsonDataForSettings,
+            onImportJsonData: _importJsonDataForSettings,
+            loadAutomaticBackupsEnabled: _loadAutomaticBackupsEnabled,
+            onAutomaticBackupsEnabledChanged:
+                _setAutomaticBackupsEnabledForSettings,
+            onListAutomaticBackups: _listAutomaticBackupsForSettings,
+            onRestoreAutomaticBackup: _restoreAutomaticBackupForSettings,
           );
         },
       ),
     );
+  }
+
+  Future<String?> _exportJsonDataForSettings() async {
+    return widget.appDataStore.exportAsJsonString(_currentSnapshot());
+  }
+
+  Future<String?> _importJsonDataForSettings(String rawJson) async {
+    try {
+      final PracticeAppSnapshot snapshot = await widget.appDataStore
+          .importFromJsonString(rawJson);
+      if (!mounted) {
+        return 'JSON imported successfully.';
+      }
+      _applyLoadedSnapshot(snapshot);
+      return 'JSON imported successfully.';
+    } on FormatException {
+      return 'Could not import JSON. Check that the pasted data is valid.';
+    } catch (_) {
+      return 'Could not import JSON.';
+    }
+  }
+
+  Future<bool> _loadAutomaticBackupsEnabled() {
+    return widget.appDataStore.loadAutomaticBackupsEnabled();
+  }
+
+  Future<String?> _setAutomaticBackupsEnabledForSettings(bool enabled) async {
+    await widget.appDataStore.saveAutomaticBackupsEnabled(enabled);
+    if (enabled) {
+      await widget.appDataStore.saveAutomaticBackupNow(_currentSnapshot());
+      return 'Automatic backups enabled. A fresh local snapshot was saved.';
+    }
+    return 'Automatic backups disabled.';
+  }
+
+  Future<List<LearnToReadBackupEntry>> _listAutomaticBackupsForSettings() {
+    return widget.appDataStore.listAutomaticBackups();
+  }
+
+  Future<String?> _restoreAutomaticBackupForSettings(String backupId) async {
+    try {
+      final PracticeAppSnapshot snapshot = await widget.appDataStore
+          .restoreAutomaticBackup(backupId);
+      if (mounted) {
+        _applyLoadedSnapshot(snapshot);
+      }
+      return 'Automatic backup restored. Current data was replaced.';
+    } on FormatException {
+      return 'Could not restore that backup.';
+    } catch (_) {
+      return 'Could not restore the selected backup.';
+    }
   }
 
   @override
@@ -1213,6 +1565,12 @@ class _SettingsPage extends StatefulWidget {
     required this.onReviewModeSelected,
     required this.onCollectionSelected,
     required this.onCollectionItemsChanged,
+    required this.onExportJsonData,
+    required this.onImportJsonData,
+    required this.loadAutomaticBackupsEnabled,
+    required this.onAutomaticBackupsEnabledChanged,
+    required this.onListAutomaticBackups,
+    required this.onRestoreAutomaticBackup,
   });
 
   final SessionPlan sessionPlan;
@@ -1226,6 +1584,12 @@ class _SettingsPage extends StatefulWidget {
   final ValueChanged<PracticeCollection> onCollectionSelected;
   final Future<void> Function(PracticeCollection collection, List<String> items)
   onCollectionItemsChanged;
+  final Future<String?> Function() onExportJsonData;
+  final Future<String?> Function(String rawJson) onImportJsonData;
+  final Future<bool> Function() loadAutomaticBackupsEnabled;
+  final Future<String?> Function(bool enabled) onAutomaticBackupsEnabledChanged;
+  final Future<List<LearnToReadBackupEntry>> Function() onListAutomaticBackups;
+  final Future<String?> Function(String backupId) onRestoreAutomaticBackup;
 
   @override
   State<_SettingsPage> createState() => _SettingsPageState();
@@ -1234,6 +1598,9 @@ class _SettingsPage extends StatefulWidget {
 class _SettingsPageState extends State<_SettingsPage> {
   static final Uri _changelogUri = Uri.parse(kAppChangelogUrl);
   late Map<PracticeCollection, List<String>> _localCollectionItems;
+  bool _automaticBackupsEnabled = false;
+  bool _isLoadingAutomaticBackupPreference = false;
+  String? _backupActionMessage;
 
   @override
   void initState() {
@@ -1242,6 +1609,21 @@ class _SettingsPageState extends State<_SettingsPage> {
       for (final entry in widget.collectionItems.entries)
         entry.key: List<String>.from(entry.value),
     };
+    _loadAutomaticBackupPreference();
+  }
+
+  Future<void> _loadAutomaticBackupPreference() async {
+    setState(() {
+      _isLoadingAutomaticBackupPreference = true;
+    });
+    final bool enabled = await widget.loadAutomaticBackupsEnabled();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _automaticBackupsEnabled = enabled;
+      _isLoadingAutomaticBackupPreference = false;
+    });
   }
 
   Future<void> _promptAddWord(PracticeCollection collection) async {
@@ -1327,6 +1709,277 @@ class _SettingsPageState extends State<_SettingsPage> {
     }
   }
 
+  Future<void> _showJsonExportDialog() async {
+    final String? exportJson = await widget.onExportJsonData();
+    if (!mounted || exportJson == null) {
+      return;
+    }
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (BuildContext bottomSheetContext) {
+        return SafeArea(
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(
+              16,
+              16,
+              16,
+              16 + MediaQuery.of(bottomSheetContext).viewInsets.bottom,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(
+                  'Export JSON',
+                  style: Theme.of(bottomSheetContext).textTheme.titleLarge,
+                ),
+                const SizedBox(height: 12),
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxHeight: 320),
+                  child: SingleChildScrollView(
+                    child: SelectableText(exportJson),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: <Widget>[
+                    FilledButton.tonalIcon(
+                      onPressed: () async {
+                        await Clipboard.setData(
+                          ClipboardData(text: exportJson),
+                        );
+                        if (!mounted) {
+                          return;
+                        }
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('JSON copied.')),
+                        );
+                      },
+                      icon: const Icon(Icons.copy_outlined),
+                      label: const Text('Copy'),
+                    ),
+                    const SizedBox(width: 8),
+                    TextButton(
+                      onPressed: () => Navigator.of(bottomSheetContext).pop(),
+                      child: const Text('Close'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _showJsonImportDialog() async {
+    final TextEditingController controller = TextEditingController();
+    final String? rawJson = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      builder: (BuildContext bottomSheetContext) {
+        return SafeArea(
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(
+              16,
+              16,
+              16,
+              16 + MediaQuery.of(bottomSheetContext).viewInsets.bottom,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(
+                  'Import JSON',
+                  style: Theme.of(bottomSheetContext).textTheme.titleLarge,
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: controller,
+                  minLines: 8,
+                  maxLines: 14,
+                  decoration: const InputDecoration(
+                    border: OutlineInputBorder(),
+                    hintText: '{\n  "schemaVersion": 1,\n  ...\n}',
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: <Widget>[
+                    FilledButton(
+                      onPressed: () =>
+                          Navigator.of(bottomSheetContext).pop(controller.text),
+                      child: const Text('Import'),
+                    ),
+                    const SizedBox(width: 8),
+                    TextButton(
+                      onPressed: () => Navigator.of(bottomSheetContext).pop(),
+                      child: const Text('Cancel'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+
+    if (rawJson == null || rawJson.trim().isEmpty || !mounted) {
+      return;
+    }
+
+    final bool? shouldImport = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          title: const Text('Import JSON'),
+          content: const Text(
+            'Replace the current progress and editable word lists with this JSON snapshot?',
+          ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('Import'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (shouldImport != true || !mounted) {
+      return;
+    }
+
+    final String? result = await widget.onImportJsonData(rawJson);
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _backupActionMessage = result;
+    });
+  }
+
+  Future<void> _toggleAutomaticBackups(bool enabled) async {
+    setState(() {
+      _automaticBackupsEnabled = enabled;
+      _backupActionMessage = null;
+    });
+    final String? result = await widget.onAutomaticBackupsEnabledChanged(
+      enabled,
+    );
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _backupActionMessage = result;
+    });
+  }
+
+  String _backupTimeLabel(BuildContext context, DateTime savedAt) {
+    final MaterialLocalizations localizations = MaterialLocalizations.of(
+      context,
+    );
+    return '${localizations.formatFullDate(savedAt)} at '
+        '${localizations.formatTimeOfDay(TimeOfDay.fromDateTime(savedAt))}';
+  }
+
+  Future<void> _restoreAutomaticBackup() async {
+    final List<LearnToReadBackupEntry> backups = await widget
+        .onListAutomaticBackups();
+    if (!mounted) {
+      return;
+    }
+
+    if (backups.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No automatic backups are available yet.'),
+        ),
+      );
+      return;
+    }
+
+    final LearnToReadBackupEntry? selectedBackup =
+        await showModalBottomSheet<LearnToReadBackupEntry>(
+          context: context,
+          builder: (BuildContext bottomSheetContext) {
+            return SafeArea(
+              child: ListView(
+                shrinkWrap: true,
+                children: <Widget>[
+                  const ListTile(
+                    title: Text(
+                      'Restore Automatic Backup',
+                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    subtitle: Text('Choose a recent local JSON snapshot'),
+                  ),
+                  const Divider(height: 1),
+                  for (final LearnToReadBackupEntry backup in backups)
+                    ListTile(
+                      leading: const Icon(Icons.history_outlined),
+                      title: Text(
+                        _backupTimeLabel(bottomSheetContext, backup.savedAt),
+                      ),
+                      subtitle: Text(backup.fileName),
+                      onTap: () => Navigator.of(bottomSheetContext).pop(backup),
+                    ),
+                ],
+              ),
+            );
+          },
+        );
+
+    if (!mounted || selectedBackup == null) {
+      return;
+    }
+
+    final bool? shouldRestore = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          title: const Text('Restore backup'),
+          content: Text(
+            'Restore "${selectedBackup.fileName}"? This replaces the current local data.',
+          ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('Restore'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (shouldRestore != true || !mounted) {
+      return;
+    }
+
+    final String? result = await widget.onRestoreAutomaticBackup(
+      selectedBackup.id,
+    );
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _backupActionMessage = result;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return SafeArea(
@@ -1364,6 +2017,56 @@ class _SettingsPageState extends State<_SettingsPage> {
                 child: _CollectionPicker(
                   selectedCollection: widget.selectedCollection,
                   onSelected: widget.onCollectionSelected,
+                ),
+              ),
+              const SizedBox(height: 20),
+              _SettingsSection(
+                title: 'Data backup',
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    if (_backupActionMessage != null) ...<Widget>[
+                      Text(_backupActionMessage!),
+                      const SizedBox(height: 12),
+                    ],
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: <Widget>[
+                        FilledButton.tonalIcon(
+                          onPressed: _showJsonExportDialog,
+                          icon: const Icon(Icons.upload_file_outlined),
+                          label: const Text('Export JSON'),
+                        ),
+                        FilledButton.tonalIcon(
+                          onPressed: _showJsonImportDialog,
+                          icon: const Icon(Icons.download_outlined),
+                          label: const Text('Import JSON'),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Automatic JSON backups'),
+                      subtitle: const Text(
+                        'Keep up to 20 recent local snapshots and update them automatically',
+                      ),
+                      value: _automaticBackupsEnabled,
+                      onChanged: _isLoadingAutomaticBackupPreference
+                          ? null
+                          : _toggleAutomaticBackups,
+                    ),
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(Icons.restore_outlined),
+                      title: const Text('Restore from automatic backup'),
+                      subtitle: const Text(
+                        'Choose one of the recent local snapshots and replace current data',
+                      ),
+                      onTap: _restoreAutomaticBackup,
+                    ),
+                  ],
                 ),
               ),
               const SizedBox(height: 20),
@@ -1415,6 +2118,15 @@ class _SettingsPageState extends State<_SettingsPage> {
                         );
                       })
                       .toList(),
+                ),
+              ),
+              const SizedBox(height: 20),
+              _SettingsSection(
+                title: 'Cloud sync groundwork',
+                child: Text(
+                  SupabaseBootstrap.isConfigured
+                      ? 'Supabase is configured for this build. Account and sync flows can be layered on top of this bootstrap next.'
+                      : 'Supabase is not configured in this build yet. Launch with SUPABASE_URL and SUPABASE_ANON_KEY to enable the bootstrap later.',
                 ),
               ),
               const SizedBox(height: 20),
