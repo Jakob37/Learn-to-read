@@ -1444,16 +1444,9 @@ class _SettingsSheetState extends State<_SettingsSheet> {
             const SizedBox(height: 20),
             _SettingsSection(
               title: 'App version',
-              child: Row(
-                children: <Widget>[
-                  const _VersionBadge(version: kAppVersionLabel),
-                  const SizedBox(width: 12),
-                  TextButton.icon(
-                    onPressed: _openChangelog,
-                    icon: const Icon(Icons.open_in_new),
-                    label: const Text('Open changelog'),
-                  ),
-                ],
+              child: _VersionBadge(
+                version: kAppVersionLabel,
+                onTap: _openChangelog,
               ),
             ),
           ],
@@ -1464,23 +1457,42 @@ class _SettingsSheetState extends State<_SettingsSheet> {
 }
 
 class _VersionBadge extends StatelessWidget {
-  const _VersionBadge({required this.version});
+  const _VersionBadge({required this.version, required this.onTap});
 
   final String version;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.primaryContainer,
+    return Tooltip(
+      message: 'Open changelog',
+      child: InkWell(
+        onTap: onTap,
         borderRadius: BorderRadius.circular(999),
-      ),
-      child: Text(
-        version,
-        style: Theme.of(
-          context,
-        ).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w700),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.primaryContainer,
+            borderRadius: BorderRadius.circular(999),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              Text(
+                version,
+                style: Theme.of(
+                  context,
+                ).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(width: 6),
+              Icon(
+                Icons.open_in_new,
+                size: 14,
+                color: Theme.of(context).colorScheme.onPrimaryContainer,
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
