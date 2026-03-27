@@ -2,6 +2,10 @@
 
 All notable user-facing changes to this project should be recorded here.
 
+## v1.3.1
+
+- Split the oversized main app file into focused settings and app-data modules so future feature work can land with less risk.
+
 ## v1.3.0
 
 - Added versioned full-app JSON snapshots with `mind`-style automatic local backups, restore-from-backup support, and dormant Supabase bootstrap plumbing for future cloud sync work.
